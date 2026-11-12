@@ -1,0 +1,26 @@
+{
+  "name": "lienradar-platform",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @lienradar/web",
+    "build": "npm run build -w @lienradar/shared && npm run build -w @lienradar/cache && npm run build -w @lienradar/db && npm run build -w @lienradar/method && npm run build -w @lienradar/ingest && npm run build -w @lienradar/web",
+    "db:generate": "npm run generate -w @lienradar/db",
+    "db:migrate": "npm run migrate -w @lienradar/db",
+    "db:push": "npm run push -w @lienradar/db",
+    "db:seed": "npm run seed -w @lienradar/db",
+    "worker": "npm run start -w @lienradar/ingest",
+    "lint": "npm run lint -w @lienradar/web",
+    "start:local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lienradar.ps1 start",
+    "stop:local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lienradar.ps1 stop",
+    "restart:local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lienradar.ps1 restart",
+    "status:local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lienradar.ps1 status",
+    "setup:local": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lienradar.ps1 setup"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

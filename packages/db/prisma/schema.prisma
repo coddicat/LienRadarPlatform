@@ -1,0 +1,449 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AuctionChannel {
+  TAX_DEED
+  FORECLOSURE
+  BANK_REO
+}
+
+enum AuctionStatus {
+  SCHEDULED
+  LIVE
+  CLOSED
+  CANCELED
+  POSTPONED
+  SOLD
+  REDEEMED
+  NOT_SOLD
+}
+
+enum DebtCategory {
+  TAX
+  MORTGAGE
+  MUNI_CODE
+  UTILITY
+  PERMIT
+  HOA
+  CDD
+  PACE
+  OTHER
+}
+
+enum AmountKind {
+  EXACT_FROM_DOC
+  ESTIMATED_SCENARIO
+  UNKNOWN
+}
+
+enum MortgageRankLevel {
+  L1_ESTIMATE
+  L2_PROVEN
+}
+
+enum RiskResult {
+  PASS
+  FAIL
+  UNKNOWN
+  NOT_APPLICABLE
+}
+
+enum DealStatus {
+  WATCHING
+  ANALYZING
+  BID_PLANNED
+  WON
+  LOST
+  SKIPPED
+  HOLDING
+  LISTED
+  SOLD
+}
+
+enum LayerStatus {
+  OK
+  PARTIAL
+  FAILED
+  STALE
+}
+
+enum IngestStage {
+  HEALTH
+  CALENDAR
+  LOTS
+  IDENTITY
+  ENRICH_PA
+  ENRICH_CLERK
+  ENRICH_TAX
+  ENRICH_MUNI
+  METHOD
+  OUTCOMES
+}
+
+enum IngestRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum ResourceHealth {
+  NEVER_RUN
+  OK
+  DEGRADED
+  DOWN
+  NOT_CONFIGURED
+}
+
+model DataResource {
+  id             String         @id @default(cuid())
+  key            String         @unique
+  name           String
+  kind           String
+  endpoint       String?
+  enabled        Boolean        @default(true)
+  status         ResourceHealth @default(NEVER_RUN)
+  lastCheckedAt  DateTime?
+  lastSuccessAt  DateTime?
+  lastError      String?
+  detail         String?
+  usedByJobs     String[]       @default([])
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model ScheduledJob {
+  id              String    @id @default(cuid())
+  key             String    @unique
+  name            String
+  cronExpr        String
+  description     String
+  enabled         Boolean   @default(true)
+  timezone        String    @default("America/New_York")
+  lastStartedAt   DateTime?
+  lastFinishedAt  DateTime?
+  lastStatus      String?
+  lastError       String?
+  lastCounts      Json?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model User {
+  id             String              @id @default(cuid())
+  email          String              @unique
+  name           String?
+  passwordHash   String
+  role           String              @default("internal")
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  deals          Deal[]
+  methodSettings UserMethodSettings?
+}
+
+/// Per-user underwriting prefs (ceiling math, bid-decision severity, opportunity thresholds).
+model UserMethodSettings {
+  userId      String   @id
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ceiling     Json
+  decisions   Json
+  opportunity Json
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+}
+
+model Property {
+  id               String   @id @default(cuid())
+  county           String   @default("miami-dade")
+  folio            String
+  folioNormalized  String
+  addressLine      String?
+  city             String?
+  state            String   @default("FL")
+  zip              String?
+  legalDescription String?
+  ownerName        String?
+  beds             Float?
+  baths            Float?
+  livingSqft       Int?
+  lotSqft          Int?
+  yearBuilt        Int?
+  zoning           String?
+  dorUse           String?
+  assessedValue    Decimal? @db.Decimal(14, 2)
+  marketValue      Decimal? @db.Decimal(14, 2)
+  justValue        Decimal? @db.Decimal(14, 2)
+  lastSaleDate     DateTime? @db.Date
+  lastSalePrice    Decimal? @db.Decimal(14, 2)
+  lat              Float?
+  lng              Float?
+  companyRegistry  String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  lots             Lot[]
+
+  @@unique([county, folioNormalized])
+  @@index([city, zip])
+}
+
+model AuctionEvent {
+  id        String         @id @default(cuid())
+  county    String         @default("miami-dade")
+  channel   AuctionChannel
+  source    String
+  saleDate  DateTime       @db.Date
+  venueUrl  String?
+  status    AuctionStatus  @default(SCHEDULED)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  lots      Lot[]
+
+  @@unique([county, channel, source, saleDate])
+  @@index([saleDate, status])
+}
+
+model Lot {
+  id                  String         @id @default(cuid())
+  naturalKey          String         @unique
+  county              String         @default("miami-dade")
+  channel             AuctionChannel
+  caseNumber          String
+  /// Tax deed Certificate # when distinct from case/TDA identity
+  certificateNumber   String?
+  /// Tax Deed # / TDA application number
+  taxDeedNumber       String?
+  folio               String
+  folioNormalized     String
+  saleDate            DateTime       @db.Date
+  status              AuctionStatus  @default(SCHEDULED)
+  plaintiff           String?
+  propertyAddress     String?
+  openingBid          Decimal?       @db.Decimal(14, 2)
+  judgmentAmount      Decimal?       @db.Decimal(14, 2)
+  /// Plaintiff max — never confuse with openingBid
+  plaintiffMaxBid     Decimal?       @db.Decimal(14, 2)
+  highBid             Decimal?       @db.Decimal(14, 2)
+  winningBid          Decimal?       @db.Decimal(14, 2)
+  confirmedSalePrice  Decimal?       @db.Decimal(14, 2)
+  purchaseConfirmed   Boolean        @default(false)
+  /// Verbatim platform outcome text (fact); category is interpretation
+  outcomeText         String?
+  outcomeCategory     String?
+  foreignOpening      Boolean        @default(false)
+  sourceUrl           String?
+  assessedValue       Decimal?       @db.Decimal(14, 2)
+  marketValue         Decimal?       @db.Decimal(14, 2)
+  propertyId          String?
+  auctionEventId      String?
+  property            Property?      @relation(fields: [propertyId], references: [id])
+  auctionEvent        AuctionEvent?  @relation(fields: [auctionEventId], references: [id])
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  observations        RawObservation[]
+  layers              EnrichmentLayer[]
+  documents           Document[]
+  debts               DebtItem[]
+  mortgages           MortgageAssessment[]
+  risks               RiskCheck[]
+  bidGate             BidGate?
+  bidCeiling          BidCeiling?
+  events              LotEvent[]
+  deals               Deal[]
+  finalBidDrops       FinalBidDrop[]
+
+  @@index([county, channel, saleDate])
+  @@index([status, saleDate])
+  @@index([saleDate])
+  @@index([caseNumber])
+  @@index([folioNormalized])
+  @@index([certificateNumber])
+  @@index([propertyId])
+  @@index([auctionEventId])
+}
+
+/// Append-only audit when a sticky winning bid is cleared by final-bid rules.
+model FinalBidDrop {
+  id          String   @id @default(cuid())
+  lotId       String
+  lot         Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  droppedBid  Decimal  @db.Decimal(14, 2)
+  reason      String
+  oldStatus   String?
+  newStatus   String?
+  oldSaleDate DateTime? @db.Date
+  newSaleDate DateTime? @db.Date
+  observedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  @@index([lotId, observedAt])
+}
+
+model RawObservation {
+  id          String   @id @default(cuid())
+  lotId       String?
+  lot         Lot?     @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  source      String
+  externalId  String?
+  fetchedAt   DateTime @default(now())
+  contentHash String?
+  payload     Json
+  createdAt   DateTime @default(now())
+
+  @@index([source, fetchedAt])
+  @@index([lotId])
+}
+
+model EnrichmentLayer {
+  id        String      @id @default(cuid())
+  lotId     String
+  lot       Lot         @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  name      String
+  status    LayerStatus @default(OK)
+  fetchedAt DateTime    @default(now())
+  payload   Json
+  error     String?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([lotId, name])
+  @@index([name, status])
+}
+
+model Document {
+  id           String    @id @default(cuid())
+  lotId        String
+  lot          Lot       @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  docType      String
+  title        String?
+  sourceUrl    String?
+  recordedDate DateTime?
+  searchScope  String?
+  evidenceNote String?
+  meta         Json?
+  createdAt    DateTime  @default(now())
+
+  @@index([lotId, docType])
+}
+
+model DebtItem {
+  id           String       @id @default(cuid())
+  lotId        String
+  lot          Lot          @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  category     DebtCategory
+  holder       String?
+  amount       Decimal?     @db.Decimal(14, 2)
+  amountKind   AmountKind   @default(UNKNOWN)
+  asOfDate     DateTime?
+  documentUrl  String?
+  evidenceNote String?
+  futureDues   Decimal?     @db.Decimal(14, 2)
+  searchScoped Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([lotId, category])
+}
+
+model MortgageAssessment {
+  id               String            @id @default(cuid())
+  lotId            String
+  lot              Lot               @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  rankLevel        MortgageRankLevel @default(L1_ESTIMATE)
+  lender           String?
+  estimatedBalance Decimal?          @db.Decimal(14, 2)
+  recordedDate     DateTime?
+  satisfied        Boolean?
+  satisfactionDoc  String?
+  evidenceNote     String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([lotId, rankLevel])
+}
+
+model RiskCheck {
+  id         String     @id @default(cuid())
+  lotId      String
+  lot        Lot        @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  code       String
+  result     RiskResult @default(UNKNOWN)
+  blocksBid  Boolean    @default(true)
+  evidence   String?
+  checkedAt  DateTime   @default(now())
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([lotId, code])
+}
+
+model BidGate {
+  id            String   @id @default(cuid())
+  lotId         String   @unique
+  lot           Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  bidAllowed    Boolean  @default(false)
+  fillScore     Float    @default(0)
+  riskClosed    Boolean  @default(false)
+  barriers      Json
+  methodVersion String
+  computedAt    DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model BidCeiling {
+  id             String   @id @default(cuid())
+  lotId          String   @unique
+  lot            Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  ceilingAmount  Decimal? @db.Decimal(14, 2)
+  paramsVersion  String
+  assumptions    Json
+  computedAt     DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model LotEvent {
+  id        String   @id @default(cuid())
+  lotId     String
+  lot       Lot      @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  kind      String
+  message   String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([lotId, createdAt])
+}
+
+model Deal {
+  id        String     @id @default(cuid())
+  lotId     String
+  lot       Lot        @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    DealStatus @default(WATCHING)
+  maxBid    Decimal?   @db.Decimal(14, 2)
+  notes     String?
+  thesis    String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@unique([lotId, userId])
+  @@index([status])
+}
+
+model IngestRun {
+  id           String          @id @default(cuid())
+  stage        IngestStage
+  status       IngestRunStatus @default(RUNNING)
+  startedAt    DateTime        @default(now())
+  finishedAt   DateTime?
+  counts       Json?
+  errorSummary String?
+  notes        String?
+
+  @@index([startedAt])
+}
