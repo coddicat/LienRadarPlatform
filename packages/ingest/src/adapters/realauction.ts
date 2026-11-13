@@ -260,14 +260,16 @@ export function createRealAuctionAdapter(opts: {
 
   async function withBrowser<T>(
     fn: (page: import("playwright").Page) => Promise<T>,
-    opts?: { proxy?: ReturnType<typeof resolveAuctionProxy> },
+    browserOpts?: { proxy?: ReturnType<typeof resolveAuctionProxy> },
   ): Promise<T> {
     const { chromium } = await import("playwright");
-    const proxy = opts?.proxy === undefined ? resolveAuctionProxy() : opts.proxy;
+    const proxy = browserOpts?.proxy === undefined ? resolveAuctionProxy() : browserOpts.proxy;
     const browser = await chromium.launch({
       headless: true,
       ...(proxy ? { proxy } : {}),
     });
+    const sessionMs = 240_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const context = await browser.newContext({
         userAgent:
@@ -276,9 +278,20 @@ export function createRealAuctionAdapter(opts: {
         extraHTTPHeaders: { "Accept-Language": "en-US,en;q=0.9" },
       });
       const page = await context.newPage();
-      return await fn(page);
+      page.setDefaultTimeout(60_000);
+      page.setDefaultNavigationTimeout(60_000);
+      const work = fn(page);
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error(`browser session timeout after ${sessionMs}ms (${opts.host})`)),
+          sessionMs,
+        );
+      });
+      return await Promise.race([work, timeout]);
     } finally {
-      await browser.close();
+      if (timer) clearTimeout(timer);
+      await browser.close().catch(() => undefined);
     }
   }
 
@@ -325,6 +338,7 @@ export function createRealAuctionAdapter(opts: {
               Referer: ref,
             },
             credentials: "same-origin",
+            signal: AbortSignal.timeout(45_000),
           });
           return { status: res.status, text: await res.text() };
         },

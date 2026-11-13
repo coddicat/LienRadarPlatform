@@ -27,6 +27,38 @@ async function disableRemovedJobs() {
   });
 }
 
+/** Clear RUNNING rows left behind when the worker process was killed mid-job. */
+async function recoverStuckRuns() {
+  const cutoff = new Date(Date.now() - 45 * 60_000);
+  const stuckJobs = await prisma.scheduledJob.updateMany({
+    where: {
+      lastStatus: "RUNNING",
+      lastStartedAt: { lt: cutoff },
+    },
+    data: {
+      lastStatus: "FAILED",
+      lastFinishedAt: new Date(),
+      lastError: "worker restarted — previous run did not finish (cleared stuck RUNNING)",
+    },
+  });
+  const stuckRuns = await prisma.ingestRun.updateMany({
+    where: {
+      status: "RUNNING",
+      startedAt: { lt: cutoff },
+    },
+    data: {
+      status: "FAILED",
+      finishedAt: new Date(),
+      errorSummary: "worker restarted — previous run did not finish (cleared stuck RUNNING)",
+    },
+  });
+  if (stuckJobs.count || stuckRuns.count) {
+    console.log(
+      `[worker] recovered stuck RUNNING jobs=${stuckJobs.count} runs=${stuckRuns.count}`,
+    );
+  }
+}
+
 async function runNamed(jobKey: string) {
   // Honor DB enabled flag even if a stale cron task still fires.
   if (jobKey !== "all") {
@@ -145,6 +177,7 @@ async function syncSchedules() {
 console.log("[worker] registering cron schedules (DB-backed enable + cron)");
 await ensureJobRows();
 await disableRemovedJobs();
+await recoverStuckRuns();
 await syncSchedules();
 setInterval(() => {
   void syncSchedules().catch((e) => console.error("[worker] schedule sync failed", e));

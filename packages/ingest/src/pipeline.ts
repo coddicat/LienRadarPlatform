@@ -176,13 +176,8 @@ export async function upsertLotCard(card: NormalizedLotCard) {
     if (match) {
       const incomingKnown = Boolean(folioNormalized && folioNormalized !== "UNKNOWN");
       const existingUnknown = !match.folioNormalized || match.folioNormalized === "UNKNOWN";
-      const existingCaseIsFolio =
-        /^\d{2}-\d{4}-\d{3}-\d{4}$/.test(match.caseNumber.trim()) ||
-        (match.folioNormalized &&
-          match.folioNormalized !== "UNKNOWN" &&
-          match.caseNumber.replace(/\D/g, "") === match.folioNormalized);
       const incomingCaseBetter =
-        existingCaseIsFolio && !/^\d{2}-\d{4}-\d{3}-\d{4}$/.test(card.caseNumber.trim());
+        caseNumberRank(card.caseNumber) > caseNumberRank(match.caseNumber);
       if (
         match.naturalKey !== naturalKey &&
         (existingUnknown || !incomingKnown || incomingCaseBetter || byFolio === match)
@@ -212,6 +207,33 @@ export async function upsertLotCard(card: NormalizedLotCard) {
     }
   }
 
+  // Exact naturalKey hit still upgrades folio/AID leftovers when the card has a better id.
+  if (existing && caseNumberRank(card.caseNumber) > caseNumberRank(existing.caseNumber)) {
+    const nextKey = lotNaturalKey({
+      county,
+      channel: card.channel,
+      caseNumber: card.caseNumber,
+      folio:
+        folioNormalized && folioNormalized !== "UNKNOWN"
+          ? card.folio || existing.folio
+          : existing.folio,
+      saleDate: civilSale,
+    });
+    const keyTaken =
+      nextKey !== existing.naturalKey
+        ? await prisma.lot.findUnique({ where: { naturalKey: nextKey }, select: { id: true } })
+        : null;
+    await prisma.lot.update({
+      where: { id: existing.id },
+      data: {
+        caseNumber: card.caseNumber,
+        ...(nextKey !== existing.naturalKey && !keyTaken ? { naturalKey: nextKey } : {}),
+      },
+    });
+    existing = await prisma.lot.findUnique({ where: { id: existing.id } });
+    if (existing) naturalKey = existing.naturalKey;
+  }
+
   const statusGuard = applyStatusGuard({
     nextStatus: card.status,
     prevStatus: existing?.status,
@@ -239,6 +261,10 @@ export async function upsertLotCard(card: NormalizedLotCard) {
     where: { naturalKey },
     update: {
       status: appliedStatus,
+      // Keep upgrading identity when calendar/day refresh brings a better Case #.
+      ...(existing && caseNumberRank(card.caseNumber) >= caseNumberRank(existing.caseNumber)
+        ? { caseNumber: card.caseNumber }
+        : {}),
       plaintiff: card.plaintiff,
       propertyAddress: card.propertyAddress,
       certificateNumber: card.certificateNumber ?? undefined,
@@ -1149,6 +1175,16 @@ function isLikelyMdCourtCase(caseNumber: string): boolean {
   return /^\d{4}-\d{5,}/.test(s);
 }
 
+/** Rank identity quality so upsert can upgrade folio leftovers → AID → court. */
+function caseNumberRank(caseNumber: string): number {
+  const s = caseNumber.trim();
+  if (!s) return 0;
+  if (looksLikeMdFolioCaseId(s)) return 1;
+  if (s.toUpperCase().startsWith("AID")) return 2;
+  if (isLikelyMdCourtCase(s)) return 4;
+  return 3;
+}
+
 /** Free OCS docket + optional AuthKey portal probe (Miami-Dade only). */
 export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_nightly") {
   const run = await startRun("ENRICH_CLERK");
@@ -1214,7 +1250,31 @@ export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_n
       return { ok: 0, failed: 0, error: probe.error };
     }
 
-    const candidates = await prisma.lot.findMany({
+    // Prefer court-style Case #s in SQL so recent folio leftovers don't crowd out OCS work.
+    const courtWhere = {
+      county: "miami-dade" as const,
+      channel: "FORECLOSURE" as const,
+      AND: [
+        { NOT: { caseNumber: { startsWith: "AID" } } },
+        {
+          OR: [
+            { caseNumber: { contains: "-CA-", mode: "insensitive" as const } },
+            { caseNumber: { contains: "-FC-", mode: "insensitive" as const } },
+            { caseNumber: { contains: "-CC-", mode: "insensitive" as const } },
+            { caseNumber: { contains: "-SC-", mode: "insensitive" as const } },
+            { caseNumber: { contains: "CA0", mode: "insensitive" as const } },
+            { caseNumber: { contains: "CA1", mode: "insensitive" as const } },
+          ],
+        },
+      ],
+    };
+    let candidates = await prisma.lot.findMany({
+      take: Math.max(limit * 2, 80),
+      orderBy: { updatedAt: "desc" },
+      where: courtWhere,
+    });
+    // Census of recent MD FC lots (for skippedBadId reporting) when court-shaped rows are scarce.
+    const recentScan = await prisma.lot.findMany({
       take: Math.max(limit * 4, 120),
       orderBy: { updatedAt: "desc" },
       where: {
@@ -1222,9 +1282,21 @@ export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_n
         channel: "FORECLOSURE",
         NOT: { caseNumber: { startsWith: "AID" } },
       },
+      select: { id: true, caseNumber: true },
     });
+    if (candidates.length < limit) {
+      const have = new Set(candidates.map((l) => l.id));
+      const extraIds = recentScan
+        .filter((l) => !have.has(l.id) && isLikelyMdCourtCase(l.caseNumber))
+        .slice(0, limit - candidates.length)
+        .map((l) => l.id);
+      if (extraIds.length) {
+        const extra = await prisma.lot.findMany({ where: { id: { in: extraIds } } });
+        candidates = [...candidates, ...extra];
+      }
+    }
     const lots = candidates.filter((l) => isLikelyMdCourtCase(l.caseNumber)).slice(0, limit);
-    const skippedBadId = candidates.length - lots.length;
+    const skippedBadId = Math.max(0, recentScan.length - lots.length);
     let ok = 0;
     let failed = 0;
     let unmatched = 0;
