@@ -164,17 +164,39 @@ export async function upsertLotCard(card: NormalizedLotCard) {
               (card.taxDeedNumber && l.taxDeedNumber && l.taxDeedNumber === card.taxDeedNumber),
           )
         : undefined;
-    const match = byCase ?? byCert;
+    const byFolio =
+      folioNormalized && folioNormalized !== "UNKNOWN"
+        ? sameDay.find(
+            (l) =>
+              l.folioNormalized === folioNormalized ||
+              l.caseNumber.replace(/\D/g, "") === folioNormalized,
+          )
+        : undefined;
+    const match = byCase ?? byCert ?? byFolio;
     if (match) {
       const incomingKnown = Boolean(folioNormalized && folioNormalized !== "UNKNOWN");
       const existingUnknown = !match.folioNormalized || match.folioNormalized === "UNKNOWN";
-      if (match.naturalKey !== naturalKey && (existingUnknown || !incomingKnown)) {
-        const nextKey = incomingKnown && existingUnknown ? naturalKey : match.naturalKey;
-        if (nextKey !== match.naturalKey) {
+      const existingCaseIsFolio =
+        /^\d{2}-\d{4}-\d{3}-\d{4}$/.test(match.caseNumber.trim()) ||
+        (match.folioNormalized &&
+          match.folioNormalized !== "UNKNOWN" &&
+          match.caseNumber.replace(/\D/g, "") === match.folioNormalized);
+      const incomingCaseBetter =
+        existingCaseIsFolio && !/^\d{2}-\d{4}-\d{3}-\d{4}$/.test(card.caseNumber.trim());
+      if (
+        match.naturalKey !== naturalKey &&
+        (existingUnknown || !incomingKnown || incomingCaseBetter || byFolio === match)
+      ) {
+        const nextKey =
+          incomingKnown && (existingUnknown || incomingCaseBetter || byFolio === match)
+            ? naturalKey
+            : match.naturalKey;
+        if (nextKey !== match.naturalKey || incomingCaseBetter) {
           await prisma.lot.update({
             where: { id: match.id },
             data: {
               naturalKey: nextKey,
+              caseNumber: incomingCaseBetter ? card.caseNumber : match.caseNumber,
               folio: card.folio || match.folio,
               folioNormalized: folioNormalized || match.folioNormalized,
             },
