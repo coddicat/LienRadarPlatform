@@ -178,6 +178,21 @@ async function syncSchedules() {
   }
 }
 
+/** Claim admin-queued RUNNING jobs (API marks RUNNING; worker executes). */
+async function claimQueuedJobs() {
+  const queued = await prisma.scheduledJob.findMany({
+    where: { lastStatus: "RUNNING", enabled: true },
+    orderBy: { lastStartedAt: "asc" },
+  });
+  for (const job of queued) {
+    if (runningJobs.has(job.key)) continue;
+    // Skip reo forever.
+    if (job.key === "reo_daily") continue;
+    console.log(`[worker] claiming queued job=${job.key}`);
+    await runNamed(job.key);
+  }
+}
+
 console.log("[worker] registering cron schedules (DB-backed enable + cron)");
 await ensureJobRows();
 await disableRemovedJobs();
@@ -186,6 +201,11 @@ await syncSchedules();
 setInterval(() => {
   void syncSchedules().catch((e) => console.error("[worker] schedule sync failed", e));
 }, 30_000);
+setInterval(() => {
+  void claimQueuedJobs().catch((e) => console.error("[worker] claim queued failed", e));
+}, 10_000);
+// Pick up anything already marked RUNNING (e.g. admin click during deploy).
+void claimQueuedJobs().catch((e) => console.error("[worker] initial claim failed", e));
 
 // Optional startup full refresh (off by default — cron + admin trigger are enough).
 if (process.env.WORKER_RUN_ALL_ON_BOOT === "1") {

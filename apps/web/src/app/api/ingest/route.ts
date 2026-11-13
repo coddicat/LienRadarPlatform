@@ -1,6 +1,6 @@
 import { invalidateUiCaches } from "@lienradar/cache";
 import { getServerSession } from "next-auth";
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { authOptions } from "@/lib/auth";
 
 /** Jobs touched by runJob("all") — keep in sync with pipeline `case "all"`. */
@@ -16,13 +16,16 @@ const ALL_REFRESH_JOB_KEYS = [
   "method_nightly",
 ] as const;
 
+/**
+ * Admin "run once" / refresh: mark jobs RUNNING and let the ingest worker claim them.
+ * Playwright calendar pulls must not run inside the web `after()` path (1GB, deploy kills).
+ */
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const job = String(body.job || body.stage || "all");
-  // Default async so the admin UI is not blocked for minutes while collectors run.
   const asyncMode = body.async !== false;
 
   try {
@@ -33,47 +36,17 @@ export async function POST(req: Request) {
       const markedRunning =
         job === "all" ? [...ALL_REFRESH_JOB_KEYS] : [job];
 
-      // Mark RUNNING before responding so live poll / page refresh shows progress.
       if (typeof ingest.markJobStart === "function") {
         await Promise.all(markedRunning.map((key) => ingest.markJobStart(key)));
       }
       await invalidateUiCaches();
-
-      // next/server `after` keeps work alive after the 202 response (avoids hung UI wait).
-      after(async () => {
-        try {
-          const result = await ingest.runJob(job);
-          console.log(`[api/ingest] job=${job} done`, result);
-        } catch (e) {
-          console.error(`[api/ingest] job=${job} failed`, e);
-          if (typeof ingest.markJobFinish === "function") {
-            // Only clear jobs still marked RUNNING (sub-jobs that already finished keep status).
-            const { prisma } = await import("@lienradar/db");
-            const stuck = await prisma.scheduledJob.findMany({
-              where: { key: { in: markedRunning }, lastStatus: "RUNNING" },
-              select: { key: true },
-            });
-            await Promise.allSettled(
-              stuck.map((row) =>
-                ingest.markJobFinish(
-                  row.key,
-                  "FAILED",
-                  {},
-                  e instanceof Error ? e.message : String(e),
-                ),
-              ),
-            );
-          }
-        } finally {
-          await invalidateUiCaches();
-        }
-      });
 
       return NextResponse.json(
         {
           job,
           accepted: true,
           markedRunning,
+          queuedForWorker: true,
         },
         { status: 202 },
       );

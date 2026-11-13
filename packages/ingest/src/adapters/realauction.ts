@@ -264,13 +264,26 @@ export function createRealAuctionAdapter(opts: {
   ): Promise<T> {
     const { chromium } = await import("playwright");
     const proxy = browserOpts?.proxy === undefined ? resolveAuctionProxy() : browserOpts.proxy;
-    const browser = await chromium.launch({
-      headless: true,
-      ...(proxy ? { proxy } : {}),
-    });
     const sessionMs = 240_000;
+    const launchMs = 45_000;
+    let browser: import("playwright").Browser | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutAfter = (ms: number, label: string) =>
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} after ${ms}ms (${opts.host})`)),
+          ms,
+        );
+      });
     try {
+      browser = await Promise.race([
+        chromium.launch({
+          headless: true,
+          ...(proxy ? { proxy } : {}),
+        }),
+        timeoutAfter(launchMs, "browser launch timeout"),
+      ]);
+      if (timer) clearTimeout(timer);
       const context = await browser.newContext({
         userAgent:
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -280,18 +293,13 @@ export function createRealAuctionAdapter(opts: {
       const page = await context.newPage();
       page.setDefaultTimeout(60_000);
       page.setDefaultNavigationTimeout(60_000);
-      const work = fn(page);
-      const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () =>
-            reject(new Error(`browser session timeout after ${sessionMs}ms (${opts.host})`)),
-          sessionMs,
-        );
-      });
-      return await Promise.race([work, timeout]);
+      return await Promise.race([
+        fn(page),
+        timeoutAfter(sessionMs, "browser session timeout"),
+      ]);
     } finally {
       if (timer) clearTimeout(timer);
-      await browser.close().catch(() => undefined);
+      await browser?.close().catch(() => undefined);
     }
   }
 
