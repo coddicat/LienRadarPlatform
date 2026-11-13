@@ -178,18 +178,25 @@ async function syncSchedules() {
   }
 }
 
-/** Claim admin-queued RUNNING jobs (API marks RUNNING; worker executes). */
+let claimBusy = false;
+
+/** Claim admin-queued RUNNING jobs (API marks RUNNING; worker executes one-at-a-time). */
 async function claimQueuedJobs() {
-  const queued = await prisma.scheduledJob.findMany({
-    where: { lastStatus: "RUNNING", enabled: true },
-    orderBy: { lastStartedAt: "asc" },
-  });
-  for (const job of queued) {
-    if (runningJobs.has(job.key)) continue;
-    // Skip reo forever.
-    if (job.key === "reo_daily") continue;
-    console.log(`[worker] claiming queued job=${job.key}`);
-    await runNamed(job.key);
+  if (claimBusy || runningJobs.size > 0) return;
+  claimBusy = true;
+  try {
+    const queued = await prisma.scheduledJob.findMany({
+      where: { lastStatus: "RUNNING", enabled: true },
+      orderBy: { lastStartedAt: "asc" },
+    });
+    for (const job of queued) {
+      if (runningJobs.has(job.key)) continue;
+      if (job.key === "reo_daily") continue;
+      console.log(`[worker] claiming queued job=${job.key}`);
+      await runNamed(job.key);
+    }
+  } finally {
+    claimBusy = false;
   }
 }
 
