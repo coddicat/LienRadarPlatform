@@ -125,61 +125,6 @@ export function RunPullTables({ data }: { data: RunPullPayload }) {
 
       <section className="run-pull-section">
         <h2>
-          {t("admin.pulledObservations")}{" "}
-          <span className="muted">({data.observations.length})</span>
-        </h2>
-        {data.observations.length === 0 ? (
-          <Empty label={t("admin.pulledEmpty")} />
-        ) : (
-          <div className="table-wrap">
-            <table className="pull-table compact">
-              <thead>
-                <tr>
-                  <th>{t("common.when")}</th>
-                  <th>{t("lotDetail.source")}</th>
-                  <th>{t("common.case")}</th>
-                  <th>{t("common.folio")}</th>
-                  <th>{t("admin.pulledSummary")}</th>
-                  <th>{t("lotDetail.pullPayload")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.observations.map((o) => (
-                  <tr key={o.id}>
-                    <td className="mono nowrap">{formatWhen(o.fetchedAt)}</td>
-                    <td>
-                      <span className="pill info">{o.source}</span>
-                      {o.externalId ? (
-                        <div className="pull-cell-sub mono truncate" title={o.externalId}>
-                          {o.externalId}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <LotCell
-                        lotId={o.lotId}
-                        caseNumber={o.caseNumber}
-                        folio={null}
-                        address={o.address}
-                      />
-                    </td>
-                    <td className="mono">{o.folio ?? "—"}</td>
-                    <td className="pull-summary" title={o.summary}>
-                      {o.summary}
-                    </td>
-                    <td>
-                      <JsonCell value={o.payload} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="run-pull-section">
-        <h2>
           {t("admin.pulledLayers")} <span className="muted">({data.layers.length})</span>
         </h2>
         {data.layers.length === 0 ? (
@@ -229,6 +174,61 @@ export function RunPullTables({ data }: { data: RunPullPayload }) {
                     </td>
                     <td>
                       <JsonCell value={l.payload} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="run-pull-section">
+        <h2>
+          {t("admin.pulledObservations")}{" "}
+          <span className="muted">({data.observations.length})</span>
+        </h2>
+        {data.observations.length === 0 ? (
+          <Empty label={t("admin.pulledEmpty")} />
+        ) : (
+          <div className="table-wrap">
+            <table className="pull-table compact">
+              <thead>
+                <tr>
+                  <th>{t("common.when")}</th>
+                  <th>{t("lotDetail.source")}</th>
+                  <th>{t("common.case")}</th>
+                  <th>{t("common.folio")}</th>
+                  <th>{t("admin.pulledSummary")}</th>
+                  <th>{t("lotDetail.pullPayload")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.observations.map((o) => (
+                  <tr key={o.id}>
+                    <td className="mono nowrap">{formatWhen(o.fetchedAt)}</td>
+                    <td>
+                      <span className="pill info">{o.source}</span>
+                      {o.externalId ? (
+                        <div className="pull-cell-sub mono truncate" title={o.externalId}>
+                          {o.externalId}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <LotCell
+                        lotId={o.lotId}
+                        caseNumber={o.caseNumber}
+                        folio={null}
+                        address={o.address}
+                      />
+                    </td>
+                    <td className="mono">{o.folio ?? "—"}</td>
+                    <td className="pull-summary" title={o.summary}>
+                      {o.summary}
+                    </td>
+                    <td>
+                      <JsonCell value={o.payload} />
                     </td>
                   </tr>
                 ))}

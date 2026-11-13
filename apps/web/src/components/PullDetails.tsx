@@ -73,35 +73,7 @@ export function PullDetails({
         {labels.hint}
       </p>
 
-      <h2 style={{ fontSize: 16, marginBottom: 8 }}>{labels.observations}</h2>
-      {observations.length === 0 ? <p className="muted">{labels.empty}</p> : null}
-      <div className="pull-list">
-        {observations.map((o) => (
-          <details key={o.id} className="pull-item">
-            <summary>
-              <span className="pill info">{o.source}</span>
-              <span className="mono muted">{o.externalId ?? "—"}</span>
-              <span className="muted">{formatWhen(o.fetchedAt)}</span>
-            </summary>
-            <dl className="kv pull-meta">
-              <dt>{labels.source}</dt>
-              <dd>{o.source}</dd>
-              <dt>{labels.externalId}</dt>
-              <dd className="mono">{o.externalId ?? "—"}</dd>
-              <dt>{labels.fetched}</dt>
-              <dd>{formatWhen(o.fetchedAt)}</dd>
-              <dt>{labels.hash}</dt>
-              <dd className="mono">{o.contentHash ?? "—"}</dd>
-              <dt>{labels.payload}</dt>
-              <dd>
-                <pre className="pull-json">{prettyJson(o.payload)}</pre>
-              </dd>
-            </dl>
-          </details>
-        ))}
-      </div>
-
-      <h2 style={{ fontSize: 16, margin: "24px 0 8px" }}>{labels.layers}</h2>
+      <h2 style={{ fontSize: 16, marginBottom: 8 }}>{labels.layers}</h2>
       {layers.length === 0 ? <p className="muted">{labels.empty}</p> : null}
       <div className="pull-list">
         {layers.map((l) => (
@@ -127,6 +99,34 @@ export function PullDetails({
               <dt>{labels.payload}</dt>
               <dd>
                 <pre className="pull-json">{prettyJson(l.payload)}</pre>
+              </dd>
+            </dl>
+          </details>
+        ))}
+      </div>
+
+      <h2 style={{ fontSize: 16, margin: "24px 0 8px" }}>{labels.observations}</h2>
+      {observations.length === 0 ? <p className="muted">{labels.empty}</p> : null}
+      <div className="pull-list">
+        {observations.map((o) => (
+          <details key={o.id} className="pull-item">
+            <summary>
+              <span className="pill info">{o.source}</span>
+              <span className="mono muted">{o.externalId ?? "—"}</span>
+              <span className="muted">{formatWhen(o.fetchedAt)}</span>
+            </summary>
+            <dl className="kv pull-meta">
+              <dt>{labels.source}</dt>
+              <dd>{o.source}</dd>
+              <dt>{labels.externalId}</dt>
+              <dd className="mono">{o.externalId ?? "—"}</dd>
+              <dt>{labels.fetched}</dt>
+              <dd>{formatWhen(o.fetchedAt)}</dd>
+              <dt>{labels.hash}</dt>
+              <dd className="mono">{o.contentHash ?? "—"}</dd>
+              <dt>{labels.payload}</dt>
+              <dd>
+                <pre className="pull-json">{prettyJson(o.payload)}</pre>
               </dd>
             </dl>
           </details>
