@@ -191,8 +191,9 @@ export async function fetchCourtOcs(caseNumber: string): Promise<OcsResult> {
     const bankruptcyMention = blob.includes("bankrupt");
 
     const caseType = (cl.caseType as string) || null;
+    const matched = !!(plaintiff || parties.length || dockets.length || caseType || caseStyle);
     return {
-      matched: !!(plaintiff || parties.length),
+      matched,
       plaintiff,
       defendants,
       caseType,
@@ -203,7 +204,7 @@ export async function fetchCourtOcs(caseNumber: string): Promise<OcsResult> {
       sourceUrl: src,
       payload: {
         flavor: "miamidade_ocs",
-        matched: true,
+        matched,
         caseNumber: cl.caseNumber || caseNumber,
         caseStyle,
         parties,

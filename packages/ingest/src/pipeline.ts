@@ -1111,6 +1111,22 @@ export async function runMethod(limit = 1500, jobKey = "method_nightly") {
   }
 }
 
+/** Miami-Dade folio shape (not a court case #) — skip OCS. */
+function looksLikeMdFolioCaseId(caseNumber: string): boolean {
+  const s = caseNumber.trim();
+  return /^\d{2}-\d{4}-\d{3}-\d{4}$/.test(s) || /^\d{13}$/.test(s.replace(/\D/g, ""));
+}
+
+/** Prefer court-style case ids (…-CA-… / year-docket) over parcel/folio leftovers. */
+function isLikelyMdCourtCase(caseNumber: string): boolean {
+  const s = caseNumber.trim().toUpperCase();
+  if (!s || s.startsWith("AID")) return false;
+  if (looksLikeMdFolioCaseId(s)) return false;
+  if (/(?:CA|FC|CC|SC|MH|CP)\b/.test(s)) return true;
+  // e.g. 2024-012345-CA-01 already covered; also accept year-leading dockets.
+  return /^\d{4}-\d{5,}/.test(s);
+}
+
 /** Free OCS docket + optional AuthKey portal probe (Miami-Dade only). */
 export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_nightly") {
   const run = await startRun("ENRICH_CLERK");
@@ -1176,8 +1192,8 @@ export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_n
       return { ok: 0, failed: 0, error: probe.error };
     }
 
-    const lots = await prisma.lot.findMany({
-      take: limit,
+    const candidates = await prisma.lot.findMany({
+      take: Math.max(limit * 4, 120),
       orderBy: { updatedAt: "desc" },
       where: {
         county: "miami-dade",
@@ -1185,8 +1201,11 @@ export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_n
         NOT: { caseNumber: { startsWith: "AID" } },
       },
     });
+    const lots = candidates.filter((l) => isLikelyMdCourtCase(l.caseNumber)).slice(0, limit);
+    const skippedBadId = candidates.length - lots.length;
     let ok = 0;
     let failed = 0;
+    let unmatched = 0;
     for (const lot of lots) {
       const result = await fetchCourtOcs(lot.caseNumber);
       await applyCourtOcs(lot.id, lot.caseNumber, result);
@@ -1197,13 +1216,36 @@ export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_n
         );
       }
       if (result.matched) ok += 1;
-      else failed += 1;
+      else if (result.error && /HTTP|timeout|fetch/i.test(result.error)) failed += 1;
+      else unmatched += 1;
       await new Promise((r) => setTimeout(r, 200));
     }
-    const status = failed && ok ? "PARTIAL" : failed && !ok ? "FAILED" : "SUCCESS";
-    await finishRun(run.id, status, { ok, failed, lots: lots.length });
-    await markJobFinish(jobKey, status, { ok, failed, lots: lots.length });
-    return { ok, failed };
+    const counts = {
+      ok,
+      failed,
+      unmatched,
+      skippedBadId,
+      lots: lots.length,
+      candidates: candidates.length,
+    };
+    // No court-case ids in the sample is PARTIAL (data shape), not a hard OCS outage.
+    const status =
+      failed && !ok
+        ? "FAILED"
+        : failed || unmatched || (lots.length === 0 && skippedBadId > 0)
+          ? "PARTIAL"
+          : "SUCCESS";
+    const errSummary =
+      lots.length === 0 && skippedBadId > 0
+        ? "no court-style case numbers in sample (folio/parcel ids skipped)"
+        : failed
+          ? `${failed} OCS transport failures`
+          : unmatched
+            ? `${unmatched} cases not found in OCS`
+            : undefined;
+    await finishRun(run.id, status, counts, errSummary);
+    await markJobFinish(jobKey, status, counts, errSummary);
+    return counts;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await finishRun(run.id, "FAILED", {}, msg);
