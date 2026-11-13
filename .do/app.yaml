@@ -1,6 +1,8 @@
-# DigitalOcean App Platform — GitHub auto-deploy from main
-# Create: doctl apps create --spec .do/app.yaml
-# After create, set secrets in the DO UI (NEXTAUTH_SECRET, optional proxies/clerk key).
+# DigitalOcean App Platform — prefer GitHub source with deploy_on_push.
+# Grant repo access first: https://cloud.digitalocean.com/apps/github/install
+# (Add LienRadarPlatform to the DigitalOcean GitHub App.) Until then the live
+# app may use public git clone; redeploy after granting access.
+# Create/update: doctl apps create|update --spec .do/app.yaml
 name: lienradar
 region: nyc
 

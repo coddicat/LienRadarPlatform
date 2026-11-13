@@ -14,6 +14,6 @@ RUN npm ci
 COPY . .
 ENV NODE_ENV=production
 ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=public"
-RUN npm run build:worker
+RUN npm run db:generate && npm run build:worker
 
 CMD ["npm", "run", "start:prod", "-w", "@lienradar/ingest"]

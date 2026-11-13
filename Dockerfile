@@ -23,7 +23,7 @@ ENV NODE_ENV=production
 ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=public"
 ENV NEXTAUTH_SECRET="build-time-placeholder"
 ENV NEXTAUTH_URL="http://localhost:3000"
-RUN npm run build
+RUN npm run db:generate && npm run build
 
 FROM base AS runner
 WORKDIR /app
