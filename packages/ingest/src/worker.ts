@@ -27,23 +27,33 @@ async function disableRemovedJobs() {
   });
 }
 
-/** Clear RUNNING rows left behind when this single worker process was killed mid-job. */
+/**
+ * Clear orphaned RUNNING rows after a hard kill.
+ * Jobs also run in the web `after()` path, so only age out long-stuck rows —
+ * never wipe fresh RUNNING on every worker restart.
+ */
 async function recoverStuckRuns() {
-  // One ingest instance: anything still RUNNING at boot is orphaned.
+  const cutoff = new Date(Date.now() - 90 * 60_000);
   const stuckJobs = await prisma.scheduledJob.updateMany({
-    where: { lastStatus: "RUNNING" },
+    where: {
+      lastStatus: "RUNNING",
+      lastStartedAt: { lt: cutoff },
+    },
     data: {
       lastStatus: "FAILED",
       lastFinishedAt: new Date(),
-      lastError: "worker restarted — previous run did not finish (cleared stuck RUNNING)",
+      lastError: "cleared stuck RUNNING (no finish within 90m)",
     },
   });
   const stuckRuns = await prisma.ingestRun.updateMany({
-    where: { status: "RUNNING" },
+    where: {
+      status: "RUNNING",
+      startedAt: { lt: cutoff },
+    },
     data: {
       status: "FAILED",
       finishedAt: new Date(),
-      errorSummary: "worker restarted — previous run did not finish (cleared stuck RUNNING)",
+      errorSummary: "cleared stuck RUNNING (no finish within 90m)",
     },
   });
   if (stuckJobs.count || stuckRuns.count) {
