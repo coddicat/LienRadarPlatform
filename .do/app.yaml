@@ -90,9 +90,11 @@ databases:
   - name: db
     engine: PG
     version: "16"
-    production: false
-  # Cache is optional (app runs without REDIS_URL). Managed Redis/Valkey on App
-  # Platform requires production: true — add later if you want shared cache.
+    production: true
+    cluster_name: lienradar-db
+    db_name: lienradar
+    db_user: lienradar
+  # Cache optional (app runs without REDIS_URL). Managed Valkey also needs production: true.
 
 alerts:
   - rule: DEPLOYMENT_FAILED
