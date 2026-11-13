@@ -13,6 +13,7 @@
     "db:migrate": "npm run migrate -w @lienradar/db",
     "db:push": "npm run push -w @lienradar/db",
     "db:seed": "npm run seed -w @lienradar/db",
+    "db:deploy": "npm run db:push && npm run db:seed",
     "worker": "npm run start -w @lienradar/ingest",
     "start:web": "npm run start -w @lienradar/web",
     "lint": "npm run lint -w @lienradar/web",

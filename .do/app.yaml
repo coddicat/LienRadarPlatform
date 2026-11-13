@@ -77,7 +77,7 @@ jobs:
     dockerfile_path: Dockerfile
     instance_count: 1
     instance_size_slug: apps-s-1vcpu-0.5gb
-    run_command: npm run db:push && npm run db:seed
+    run_command: npm run db:deploy
     envs:
       - key: NODE_ENV
         scope: RUN_TIME
