@@ -187,14 +187,22 @@ function parseAreaHtml(html: string): Record<string, ParsedItem> {
     const caseLinkedAlt = caseLinked.text || caseLinked.href ? caseLinked : linkedField(blk, "Case Number");
     const parcelLinked = linkedField(blk, "Parcel ID");
 
-    const platform_case =
+    const platform_case_raw =
       caseLinkedAlt.text || pairs["Case #"] || pairs["Case Number"] || null;
     const certificate = pairs["Certificate #"] || null;
     const tax_deed = pairs["Tax Deed #"] || null;
-    const ident = platform_case || certificate || tax_deed;
     const parcel_id =
       (parcelLinked.text || pairs["Parcel ID"] || "").trim() || null;
     const folioDigits = parcel_id ? parcel_id.replace(/\D/g, "") : null;
+    // Miami-Dade sometimes puts the folio in "Case #" — never treat folio shape as court identity.
+    const folioShapedCase =
+      !!platform_case_raw &&
+      (/^\d{2}-\d{4}-\d{3}-\d{4}$/.test(platform_case_raw.trim()) ||
+        (folioDigits != null &&
+          platform_case_raw.replace(/\D/g, "") === folioDigits &&
+          folioDigits.length >= 10));
+    const platform_case = folioShapedCase ? null : platform_case_raw;
+    const ident = platform_case || certificate || tax_deed;
     const auction_type =
       pairs["Auction Type"] ||
       (platform_case && pairs["Final Judgment Amount"] && !certificate && !tax_deed
