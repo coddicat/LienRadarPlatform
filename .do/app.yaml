@@ -1,0 +1,104 @@
+# DigitalOcean App Platform — GitHub auto-deploy from main
+# Create: doctl apps create --spec .do/app.yaml
+# After create, set secrets in the DO UI (NEXTAUTH_SECRET, optional proxies/clerk key).
+name: lienradar
+region: nyc
+
+services:
+  - name: web
+    github:
+      repo: coddicat/LienRadarPlatform
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    health_check:
+      http_path: /api/health
+      initial_delay_seconds: 20
+      period_seconds: 10
+      timeout_seconds: 5
+      failure_threshold: 6
+    envs:
+      - key: NODE_ENV
+        scope: RUN_AND_BUILD_TIME
+        value: "production"
+      - key: PORT
+        scope: RUN_TIME
+        value: "8080"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: ${redis.DATABASE_URL}
+      - key: NEXTAUTH_URL
+        scope: RUN_TIME
+        value: ${APP_URL}
+      - key: NEXTAUTH_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        # Set on create / in DO UI — never commit a real value
+        value: "CHANGE_ME_IN_DIGITALOCEAN_UI"
+      - key: LR_ACTIVE_COUNTIES
+        scope: RUN_AND_BUILD_TIME
+        value: "miami-dade,broward,palm-beach,monroe"
+      # Optional secrets (clerk key, RA_HTTP_PROXY, RA_PROXY): add in DO App Settings
+
+workers:
+  - name: ingest
+    github:
+      repo: coddicat/LienRadarPlatform
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile.worker
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-2gb
+    envs:
+      - key: NODE_ENV
+        scope: RUN_AND_BUILD_TIME
+        value: "production"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: REDIS_URL
+        scope: RUN_TIME
+        value: ${redis.DATABASE_URL}
+      - key: LR_ACTIVE_COUNTIES
+        scope: RUN_AND_BUILD_TIME
+        value: "miami-dade,broward,palm-beach,monroe"
+      # Optional: MIAMI_DADE_CLERK_AUTH_KEY, RA_HTTP_PROXY, RA_PROXY in DO App Settings
+
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY
+    github:
+      repo: coddicat/LienRadarPlatform
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    run_command: npm run db:push && npm run db:seed
+    envs:
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: "production"
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    production: false
+  - name: redis
+    engine: VALKEY
+    version: "8"
+    production: false
+
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED

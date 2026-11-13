@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/worker.ts",
+    "start:prod": "node dist/worker.js",
     "once": "tsx src/worker.ts --once"
   },
   "dependencies": {

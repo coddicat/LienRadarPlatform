@@ -1,0 +1,19 @@
+# LienRadar ingest worker (Playwright browsers included)
+FROM mcr.microsoft.com/playwright:v1.51.0-jammy
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY apps/web/package.json ./apps/web/
+COPY packages/shared/package.json ./packages/shared/
+COPY packages/cache/package.json ./packages/cache/
+COPY packages/db/package.json ./packages/db/
+COPY packages/method/package.json ./packages/method/
+COPY packages/ingest/package.json ./packages/ingest/
+RUN npm ci
+
+COPY . .
+ENV NODE_ENV=production
+ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=public"
+RUN npm run build:worker
+
+CMD ["npm", "run", "start:prod", "-w", "@lienradar/ingest"]
