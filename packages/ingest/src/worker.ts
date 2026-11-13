@@ -27,14 +27,11 @@ async function disableRemovedJobs() {
   });
 }
 
-/** Clear RUNNING rows left behind when the worker process was killed mid-job. */
+/** Clear RUNNING rows left behind when this single worker process was killed mid-job. */
 async function recoverStuckRuns() {
-  const cutoff = new Date(Date.now() - 45 * 60_000);
+  // One ingest instance: anything still RUNNING at boot is orphaned.
   const stuckJobs = await prisma.scheduledJob.updateMany({
-    where: {
-      lastStatus: "RUNNING",
-      lastStartedAt: { lt: cutoff },
-    },
+    where: { lastStatus: "RUNNING" },
     data: {
       lastStatus: "FAILED",
       lastFinishedAt: new Date(),
@@ -42,10 +39,7 @@ async function recoverStuckRuns() {
     },
   });
   const stuckRuns = await prisma.ingestRun.updateMany({
-    where: {
-      status: "RUNNING",
-      startedAt: { lt: cutoff },
-    },
+    where: { status: "RUNNING" },
     data: {
       status: "FAILED",
       finishedAt: new Date(),
