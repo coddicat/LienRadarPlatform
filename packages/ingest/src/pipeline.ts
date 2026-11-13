@@ -1322,16 +1322,16 @@ export async function runCourtOcsEnrichment(limit = 60, jobKey = "enrich_clerk_n
       lots: lots.length,
       candidates: candidates.length,
     };
-    // No court-case ids in the sample is PARTIAL (data shape), not a hard OCS outage.
+    // No court-case ids available (folio/AID only) is SUCCESS with a note — not an OCS outage.
     const status =
       failed && !ok
         ? "FAILED"
-        : failed || unmatched || (lots.length === 0 && skippedBadId > 0)
+        : failed || unmatched
           ? "PARTIAL"
           : "SUCCESS";
     const errSummary =
       lots.length === 0 && skippedBadId > 0
-        ? "no court-style case numbers in sample (folio/parcel ids skipped)"
+        ? "no court-style case numbers available (folio/AID skipped)"
         : failed
           ? `${failed} OCS transport failures`
           : unmatched
