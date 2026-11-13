@@ -1,9 +1,9 @@
-import { FINAL_AUCTION_OUTCOMES, isSoldAuctionStatus } from "@lienradar/shared";
+import { FINAL_AUCTION_OUTCOMES, floridaDateISO, isSoldAuctionStatus, toCivilDateISO } from "@lienradar/shared";
 import { isExplicitFailedSaleReason } from "./outcomeReason.js";
 
 /** Florida "today" as YYYY-MM-DD (America/New_York). */
 export function floridaToday(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  return floridaDateISO();
 }
 
 export type SourceAuthority = "platform" | "secondary";
@@ -44,13 +44,7 @@ const toNum = (v: string | number | null | undefined): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-const toIso = (v: string | Date | null | undefined): string | null => {
-  if (v === null || v === undefined) return null;
-  if (v instanceof Date) {
-    return v.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  }
-  return v.slice(0, 10);
-};
+const toIso = (v: string | Date | null | undefined): string | null => toCivilDateISO(v);
 
 /**
  * Status that will land on the row. Call BEFORE decideFinalBid so price uses the applied status.

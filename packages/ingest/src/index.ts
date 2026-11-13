@@ -2,7 +2,6 @@ export * from "./pipeline.js";
 export * from "./status.js";
 export * from "./adapters/types.js";
 export * from "./adapters/realauction.js";
-export * from "./adapters/reoMarketplaces.js";
 export * from "./enrichment/propertyAppraiser.js";
 export * from "./enrichment/taxDelinquent.js";
 export * from "./enrichment/folioResolve.js";

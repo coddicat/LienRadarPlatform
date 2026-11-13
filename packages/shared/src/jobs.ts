@@ -236,25 +236,12 @@ export const LEGACY_MIAMI_RESOURCE_KEYS = [
   "miami_official_records",
 ] as const;
 
+/** Removed marketplace sources — seed disables these if still present in DB. */
+export const REMOVED_REO_RESOURCE_KEYS = ["auction_com_reo", "hubzu_reo"] as const;
+
 export const DATA_RESOURCES: ResourceDef[] = [
   ...auctionResources(),
   ...countyEnrichmentResources(),
-  {
-    key: "auction_com_reo",
-    name: "Auction.com (Bank REO)",
-    kind: "bank_reo",
-    endpoint: "https://www.auction.com",
-    requiresEnv: "AUCTION_COM_ENABLED",
-    usedByJobs: ["reo_daily"],
-  },
-  {
-    key: "hubzu_reo",
-    name: "Hubzu (Bank REO)",
-    kind: "bank_reo",
-    endpoint: "https://www.hubzu.com",
-    requiresEnv: "HUBZU_ENABLED",
-    usedByJobs: ["reo_daily"],
-  },
 ];
 
 const SOUTH_FL_AUCTION_KEYS = ACTIVE_COUNTIES.flatMap((slug: CountySlug) => {
@@ -361,15 +348,6 @@ export const SCHEDULED_JOBS: ScheduledJobDef[] = [
       "broward_tax_collector",
       "monroe_tax_collector",
     ],
-  },
-  {
-    key: "reo_daily",
-    name: "Miami-area Bank REO marketplaces",
-    cronExpr: "10 5 * * *",
-    description:
-      "Live Playwright pull of Auction.com Miami + Hubzu (Miami-Dade area only; AUCTION_COM_ENABLED=1 / HUBZU_ENABLED=1)",
-    timezone: "America/New_York",
-    resourceKeys: ["auction_com_reo", "hubzu_reo"],
   },
   {
     key: "method_nightly",

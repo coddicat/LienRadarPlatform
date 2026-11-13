@@ -212,7 +212,7 @@ export function computeBidGate(
       barriers,
       "warn",
       "reo_source_review",
-      "BANK_REO requires an enabled live marketplace feed; verify source provenance before bidding",
+      "BANK_REO marketplace feeds (Auction.com / Hubzu) were removed — verify provenance before bidding",
     );
   }
 

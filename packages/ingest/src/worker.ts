@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { prisma } from "@lienradar/db";
-import { SCHEDULED_JOBS } from "@lienradar/shared";
+import { REMOVED_REO_RESOURCE_KEYS, SCHEDULED_JOBS } from "@lienradar/shared";
 import { loadRootEnv } from "./loadEnv.js";
 import { auctionProxySummary } from "./proxy.js";
 import { runJob } from "./pipeline.js";
@@ -8,21 +8,51 @@ import { runJob } from "./pipeline.js";
 loadRootEnv();
 console.log(`[worker] auction proxy: ${auctionProxySummary()}`);
 
+const runningJobs = new Set<string>();
+
+async function disableRemovedJobs() {
+  await prisma.scheduledJob.updateMany({
+    where: { key: "reo_daily" },
+    data: {
+      enabled: false,
+      description: "Removed — Auction.com / Hubzu Bank REO job disabled",
+    },
+  });
+  await prisma.dataResource.updateMany({
+    where: { key: { in: [...REMOVED_REO_RESOURCE_KEYS] } },
+    data: {
+      enabled: false,
+      detail: "Removed — Auction.com / Hubzu Bank REO sources disabled",
+    },
+  });
+}
+
 async function runNamed(jobKey: string) {
   // Honor DB enabled flag even if a stale cron task still fires.
   if (jobKey !== "all") {
+    if (jobKey === "reo_daily") {
+      console.log(`[worker] job=${jobKey} skipped (removed)`);
+      return;
+    }
     const row = await prisma.scheduledJob.findUnique({ where: { key: jobKey } });
     if (row && !row.enabled) {
       console.log(`[worker] job=${jobKey} skipped (disabled in DB)`);
       return;
     }
   }
+  if (runningJobs.has(jobKey)) {
+    console.log(`[worker] job=${jobKey} skipped (already running)`);
+    return;
+  }
+  runningJobs.add(jobKey);
   console.log(`[worker] job=${jobKey} start`);
   try {
     const result = await runJob(jobKey);
     console.log(`[worker] job=${jobKey} done`, result);
   } catch (e) {
     console.error(`[worker] job=${jobKey} failed`, e);
+  } finally {
+    runningJobs.delete(jobKey);
   }
 }
 
@@ -114,10 +144,13 @@ async function syncSchedules() {
 
 console.log("[worker] registering cron schedules (DB-backed enable + cron)");
 await ensureJobRows();
+await disableRemovedJobs();
 await syncSchedules();
 setInterval(() => {
   void syncSchedules().catch((e) => console.error("[worker] schedule sync failed", e));
 }, 30_000);
 
-// Startup: probe resources / refresh status without inventing lots from mocks.
-void runNamed("all");
+// Optional startup full refresh (off by default — cron + admin trigger are enough).
+if (process.env.WORKER_RUN_ALL_ON_BOOT === "1") {
+  void runNamed("all");
+}

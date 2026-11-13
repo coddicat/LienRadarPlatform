@@ -49,7 +49,6 @@ npm run once -w @lienradar/ingest -- --once --job=calendar_6h
 | `enrich_pa_6h` | `45 */6 * * *` | Property Appraiser ArcGIS |
 | `enrich_clerk_nightly` | `30 3 * * *` | Clerk API (needs AuthKey) |
 | `enrich_tax_nightly` | `50 3 * * *` | Tax Collector portal |
-| `reo_daily` | `10 5 * * *` | Auction.com / Hubzu (env-gated) |
 | `method_nightly` | `20 4 * * *` | BidGate recompute |
 | `nightly` | `20 2 * * *` | Full cycle |
 
@@ -58,6 +57,5 @@ Open **Admin** to see last run status and resource errors.
 ## Env for locked resources
 
 - `MIAMI_DADE_CLERK_AUTH_KEY` — Clerk Developers
-- `AUCTION_COM_ENABLED=1` / `HUBZU_ENABLED=1` — only after you approve live REO access
 
-Until those are set, Admin shows **NOT_CONFIGURED**. No fake rows are inserted.
+Until that is set, Admin shows **NOT_CONFIGURED** for paid clerk paths. No fake rows are inserted.

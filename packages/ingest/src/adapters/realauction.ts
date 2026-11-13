@@ -4,6 +4,8 @@ import {
   COUNTY_REGISTRY,
   countyResourceKey,
   resolveActiveCounties,
+  toCivilDateISO,
+  toUsSlashDate,
   type CountySlug,
 } from "@lienradar/shared";
 import { resolveAuctionProxy, resolveAuctionProxyCandidates } from "../proxy.js";
@@ -365,16 +367,29 @@ export function createRealAuctionAdapter(opts: {
       for (const it of upd.ADATA?.AITEM ?? []) {
         live.set(String(it.AID), outcomeFromLive(it));
       }
+      let omitted = 0;
       for (const aid of Object.keys(items)) {
-        if (!live.has(aid)) {
-          throw new Error(`UPDATE omitted AID ${aid}; outcomes are unknown`);
-        }
+        if (!live.has(aid)) omitted += 1;
+      }
+      if (omitted > 0) {
+        console.warn(
+          `[realauction] UPDATE omitted ${omitted}/${Object.keys(items).length} AIDs on ${opts.host} page=${pageIdx} — keeping preview status for those rows`,
+        );
       }
 
       let fresh = 0;
       for (const [aid, st] of Object.entries(items)) {
         if (byAid.has(aid)) continue;
-        const lv = live.get(aid)!;
+        const lv = live.get(aid);
+        if (!lv) {
+          // Fail-open for partial UPDATE payloads — keep calendar/preview card fields.
+          byAid.set(aid, {
+            ...st,
+            case_number: st.case_number || `AID${aid}`,
+          });
+          fresh += 1;
+          continue;
+        }
         byAid.set(aid, {
           ...st,
           plaintiff_max: lv.plaintiff_max,
@@ -441,11 +456,14 @@ export function createRealAuctionAdapter(opts: {
             }),
           );
           for (const c of cells) {
-            if (!c.dayid || seen.has(c.dayid)) continue;
-            const d = new Date(c.dayid);
+            if (!c.dayid) continue;
+            const civil = toCivilDateISO(c.dayid);
+            if (!civil || seen.has(civil)) continue;
+            // Compare at noon UTC so civil day stays inside [from,to] window edges.
+            const d = new Date(`${civil}T12:00:00.000Z`);
             if (d >= from && d <= to) {
-              seen.add(c.dayid);
-              days.push({ saleDate: c.dayid, countHint: c.countHint });
+              seen.add(civil);
+              days.push({ saleDate: civil, countHint: c.countHint });
             }
           }
         };
@@ -490,7 +508,8 @@ export function createRealAuctionAdapter(opts: {
         });
         await page.waitForTimeout(600);
 
-        const referer = `${index}?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE=${saleDate}`;
+        const auctionDateParam = toUsSlashDate(saleDate) ?? saleDate;
+        const referer = `${index}?zaction=AUCTION&Zmethod=PREVIEW&AUCTIONDATE=${auctionDateParam}`;
         const res = await page.goto(referer, { waitUntil: "domcontentloaded", timeout: 60_000 });
         if (!res || !res.ok()) {
           throw new Error(`PREVIEW HTTP ${res?.status() ?? "no response"}`);

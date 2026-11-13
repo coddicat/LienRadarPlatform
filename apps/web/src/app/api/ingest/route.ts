@@ -13,7 +13,6 @@ const ALL_REFRESH_JOB_KEYS = [
   "enrich_clerk_nightly",
   "enrich_tax_nightly",
   "enrich_or_nightly",
-  "reo_daily",
   "method_nightly",
 ] as const;
 
@@ -48,11 +47,16 @@ export async function POST(req: Request) {
         } catch (e) {
           console.error(`[api/ingest] job=${job} failed`, e);
           if (typeof ingest.markJobFinish === "function") {
-            // Clear stuck RUNNING rows if the bundle failed early.
+            // Only clear jobs still marked RUNNING (sub-jobs that already finished keep status).
+            const { prisma } = await import("@lienradar/db");
+            const stuck = await prisma.scheduledJob.findMany({
+              where: { key: { in: markedRunning }, lastStatus: "RUNNING" },
+              select: { key: true },
+            });
             await Promise.allSettled(
-              markedRunning.map((key) =>
+              stuck.map((row) =>
                 ingest.markJobFinish(
-                  key,
+                  row.key,
                   "FAILED",
                   {},
                   e instanceof Error ? e.message : String(e),

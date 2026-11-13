@@ -5,6 +5,7 @@ import {
   FLORIDA_COUNTY_SET,
   TimeBucket,
   deriveTimeBucket,
+  floridaDateISO,
 } from "@lienradar/shared";
 import { getServerSession } from "next-auth";
 import Link from "next/link";
@@ -13,9 +14,17 @@ import { LotsFilters } from "@/components/LotsFilters";
 import { Shell } from "@/components/Shell";
 import { authOptions } from "@/lib/auth";
 import { dealValue, discountPct, num, spreadUsd } from "@/lib/dealMetrics";
+import { loadDashboardStats } from "@/lib/dashboardStats";
 import { floridaTodayUtcDate } from "@/lib/floridaDate";
 import { getI18n } from "@/lib/i18n";
 import { applyMethodToLot, getUserMethodSettings } from "@/lib/methodSettings";
+
+function daysUntilCivil(saleIso: string, todayCivil: string): number {
+  const sale = saleIso.slice(0, 10);
+  const a = Date.parse(`${sale}T12:00:00.000Z`);
+  const b = Date.parse(`${todayCivil}T12:00:00.000Z`);
+  return Math.round((a - b) / 86_400_000);
+}
 
 export const dynamic = "force-dynamic";
 
@@ -143,7 +152,36 @@ export default async function LotsPage({
     });
   }
 
-  const [total, lots, countyRows] = await Promise.all([
+  // Gate filters use stored BidGate so pagination stays correct; per-user method still
+  // recomputed for display. "pending" ≈ no gate row or fill incomplete.
+  const postFilterNeeded = gate.length > 0 || wantReady || wantDiscount;
+  if (gate.length === 1 && gate[0] === "allowed") {
+    andPush(where, { bidGate: { is: { bidAllowed: true } } });
+  } else if (gate.length === 1 && gate[0] === "blocked") {
+    andPush(where, { bidGate: { is: { bidAllowed: false, riskClosed: true } } });
+  } else if (gate.length === 1 && gate[0] === "pending") {
+    andPush(where, {
+      OR: [{ bidGate: { is: null } }, { bidGate: { is: { bidAllowed: false, riskClosed: false } } }],
+    });
+  } else if (gate.length > 1) {
+    const ors: Prisma.LotWhereInput[] = [];
+    if (gate.includes("allowed")) ors.push({ bidGate: { is: { bidAllowed: true } } });
+    if (gate.includes("blocked")) ors.push({ bidGate: { is: { bidAllowed: false, riskClosed: true } } });
+    if (gate.includes("pending")) {
+      ors.push({ bidGate: { is: null } });
+      ors.push({ bidGate: { is: { bidAllowed: false, riskClosed: false } } });
+    }
+    if (ors.length) andPush(where, { OR: ors });
+  }
+  if (wantReady && !wantDiscount) {
+    andPush(where, { bidGate: { is: { bidAllowed: true } } });
+  }
+
+  const fetchTake = postFilterNeeded && wantDiscount ? PAGE_SIZE * 4 : PAGE_SIZE;
+  const fetchSkip = postFilterNeeded && wantDiscount ? 0 : (page - 1) * PAGE_SIZE;
+
+  const todayCivil = floridaDateISO();
+  const [total, lots, countyRows, board] = await Promise.all([
     prisma.lot.count({ where }),
     prisma.lot.findMany({
       where,
@@ -151,10 +189,16 @@ export default async function LotsPage({
         property: {
           select: {
             addressLine: true,
+            city: true,
+            zip: true,
             assessedValue: true,
             marketValue: true,
             lat: true,
             lng: true,
+            beds: true,
+            baths: true,
+            livingSqft: true,
+            yearBuilt: true,
           },
         },
         debts: {
@@ -165,14 +209,15 @@ export default async function LotsPage({
         _count: { select: { risks: true } },
       },
       orderBy: [{ saleDate: "asc" }, { caseNumber: "asc" }],
-      skip: (page - 1) * PAGE_SIZE,
-      take: PAGE_SIZE,
+      skip: fetchSkip,
+      take: fetchTake,
     }),
     prisma.lot.findMany({
       distinct: ["county"],
       select: { county: true },
       orderBy: { county: "asc" },
     }),
+    loadDashboardStats(userId),
   ]);
   const countiesPresent = countyRows.map((r) => r.county).filter(Boolean);
 
@@ -182,6 +227,7 @@ export default async function LotsPage({
     const opening = num(lot.openingBid);
     const value = dealValue(lot);
     const method = applyMethodToLot(lot, methodSettings);
+    const saleIso = lot.saleDate.toISOString();
     return {
       id: lot.id,
       caseNumber: lot.caseNumber,
@@ -190,12 +236,16 @@ export default async function LotsPage({
       channel: lot.channel,
       status: lot.status,
       bucket: tb,
-      saleDate: lot.saleDate.toISOString(),
+      saleDate: saleIso,
       propertyAddress: lot.propertyAddress,
       propertyAddressLine: lot.property?.addressLine ?? null,
+      city: lot.property?.city ?? null,
+      zip: lot.property?.zip ?? null,
       plaintiff: lot.plaintiff,
       openingBid: opening,
       judgmentAmount: num(lot.judgmentAmount),
+      winningBid: num(lot.winningBid),
+      purchaseConfirmed: lot.purchaseConfirmed,
       valueHint: value,
       spread: spreadUsd(opening, value),
       discountPct: discountPct(opening, value),
@@ -210,6 +260,12 @@ export default async function LotsPage({
       lng: lot.property?.lng ?? null,
       riskCount: lot._count.risks,
       riskFailCount: lot.risks.filter((r) => r.result === "FAIL").length,
+      riskUnknownCount: lot.risks.filter((r) => r.result === "UNKNOWN").length,
+      beds: lot.property?.beds ?? null,
+      baths: lot.property?.baths ?? null,
+      livingSqft: lot.property?.livingSqft ?? null,
+      yearBuilt: lot.property?.yearBuilt ?? null,
+      daysUntilSale: daysUntilCivil(saleIso, todayCivil),
     };
   });
 
@@ -221,21 +277,16 @@ export default async function LotsPage({
         i.discountPct >= hotDiscountPct &&
         i.bucket !== "PAST";
       const readyOk = wantReady && i.bidAllowed && i.bucket !== "PAST";
-      return discountOk || readyOk;
+      if (wantDiscount && wantReady) return discountOk || readyOk;
+      if (wantDiscount) return discountOk;
+      return readyOk;
     });
   }
 
-  if (gate.length) {
-    items = items.filter((i) => {
-      const allowed = i.hasGate && i.bidAllowed;
-      const blocked = i.hasGate && !i.bidAllowed && !i.needsDd;
-      const pending = !i.hasGate || (!i.bidAllowed && i.needsDd);
-      return (
-        (gate.includes("allowed") && allowed) ||
-        (gate.includes("blocked") && blocked) ||
-        (gate.includes("pending") && pending)
-      );
-    });
+  // Discount still needs in-memory threshold — page within the over-fetched window.
+  if (wantDiscount) {
+    const start = (page - 1) * PAGE_SIZE;
+    items = items.slice(start, start + PAGE_SIZE);
   }
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -258,17 +309,26 @@ export default async function LotsPage({
 
   return (
     <Shell active="lots" email={session?.user?.email}>
-      <div className="page-head">
-        <h1>{t("lots.title")}</h1>
-        <p className="sub">{t("lots.subtitle")}</p>
+      <div className="page-head lots-page-head">
+        <div>
+          <h1>{t("lots.title")}</h1>
+          <p className="sub">{t("lots.subtitle")}</p>
+        </div>
+        <p className="lots-page-tip muted">{t("lots.partnerTip")}</p>
       </div>
 
-      <div className="callout">{t("lots.partnerTip")}</div>
-
-      <div className="panel">
+      <div className="panel lots-board">
         <LotsFilters
           initial={{ q, county, status, bucket, channel, gate, opportunity }}
           countyOptions={countiesPresent}
+          boardStats={{
+            today: board.buckets.CURRENT,
+            upcoming: board.buckets.FUTURE,
+            ready: board.readyToBid,
+            review: board.needsReview,
+            blocked: board.doNotBid,
+            hot: board.discountOpps,
+          }}
         />
 
         <LotsExplorer
@@ -279,8 +339,23 @@ export default async function LotsPage({
 
         {totalPages > 1 ? (
           <div className="pager">
-            {page > 1 ? <Link className="btn secondary" href={pageHref(page - 1)}>{t("lots.prevPage")}</Link> : null}
-            {page < totalPages ? <Link className="btn secondary" href={pageHref(page + 1)}>{t("lots.nextPage")}</Link> : null}
+            {page > 1 ? (
+              <Link className="btn secondary" href={pageHref(page - 1)}>
+                {t("lots.prevPage")}
+              </Link>
+            ) : (
+              <span />
+            )}
+            <span className="pager-status muted">
+              {t("lots.page")} {page} / {totalPages}
+            </span>
+            {page < totalPages ? (
+              <Link className="btn secondary" href={pageHref(page + 1)}>
+                {t("lots.nextPage")}
+              </Link>
+            ) : (
+              <span />
+            )}
           </div>
         ) : null}
       </div>

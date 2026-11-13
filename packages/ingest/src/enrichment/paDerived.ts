@@ -1,4 +1,4 @@
-import { prisma } from "@lienradar/db";
+import { Prisma, prisma } from "@lienradar/db";
 import { RiskResult } from "@lienradar/shared";
 
 export type PaSale = {
@@ -8,6 +8,9 @@ export type PaSale = {
   orBook: string | null;
   orPage: string | null;
   grantee: string | null;
+  grantor: string | null;
+  qualifiedFlag: string | null;
+  qualificationDescription: string | null;
 };
 
 export type OccupancyProxy = {
@@ -52,35 +55,84 @@ function normStreetToken(raw: string): string {
     .trim();
 }
 
-/** Latest qualified sale from PA SalesInfos (already fetched). */
+function mapSaleRow(row: Record<string, unknown>): PaSale & { _ts: number; _price: number } {
+  const dateOfSale = str(row.DateOfSale);
+  const salePrice = num(row.SalePrice);
+  return {
+    dateOfSale,
+    salePrice,
+    instrument: str(row.SaleInstrument),
+    orBook: str(row.OfficialRecordBook),
+    orPage: str(row.OfficialRecordPage),
+    grantee: str(row.GranteeName1),
+    grantor: str(row.GrantorName1),
+    qualifiedFlag: str(row.QualifiedFlag),
+    qualificationDescription: str(row.QualificationDescription),
+    _ts: parseMdY(dateOfSale)?.getTime() ?? 0,
+    _price: salePrice ?? 0,
+  };
+}
+
+function hasUsefulOr(book: string | null, page: string | null): boolean {
+  if (!book || !page) return false;
+  const b = book.replace(/^0+/, "") || "0";
+  const p = page.replace(/^0+/, "") || "0";
+  return b !== "0" && p !== "0";
+}
+
+/** Public MD Clerk OR image URL for a book/page (official records deep link). */
+export function miamiDadeOrImageUrl(book: string, page: string): string {
+  const b = book.replace(/\D/g, "");
+  const p = page.replace(/\D/g, "");
+  return (
+    "https://onlineservices.miamidadeclerk.gov/officialrecords/api/DocumentImage/getdocumentimage" +
+    `?redact=false&sBook=${encodeURIComponent(b)}&sBookType=${encodeURIComponent("O ")}&sPage=${encodeURIComponent(p)}`
+  );
+}
+
+/** Latest priced sale from PA SalesInfos (prefer qualified). */
 export function pickLatestSale(salesInfos: unknown): PaSale | null {
   if (!Array.isArray(salesInfos) || salesInfos.length === 0) return null;
   const rows = salesInfos
-    .map((row) => {
-      const r = row as Record<string, unknown>;
-      const dateOfSale = str(r.DateOfSale);
-      const salePrice = num(r.SalePrice);
-      return {
-        dateOfSale,
-        salePrice,
-        instrument: str(r.SaleInstrument),
-        orBook: str(r.OfficialRecordBook),
-        orPage: str(r.OfficialRecordPage),
-        grantee: str(r.GranteeName1),
-        _ts: parseMdY(dateOfSale)?.getTime() ?? 0,
-      };
-    })
-    .filter((r) => r.salePrice != null && r.salePrice > 0 && r._ts > 0)
-    .sort((a, b) => b._ts - a._ts);
+    .map((row) => mapSaleRow(row as Record<string, unknown>))
+    .filter((r) => r._price > 0 && r._ts > 0)
+    .sort((a, b) => {
+      const aq = a.qualifiedFlag === "Q" ? 1 : 0;
+      const bq = b.qualifiedFlag === "Q" ? 1 : 0;
+      if (bq !== aq) return bq - aq;
+      return b._ts - a._ts;
+    });
   const top = rows[0];
   if (!top) return null;
+  const { _ts: _a, _price: _b, ...sale } = top;
+  return sale;
+}
+
+/** Recent sales that have real OR book/page — used for Document deep links. */
+export function listSalesWithOr(salesInfos: unknown, limit = 8): PaSale[] {
+  if (!Array.isArray(salesInfos) || salesInfos.length === 0) return [];
+  return salesInfos
+    .map((row) => mapSaleRow(row as Record<string, unknown>))
+    .filter((r) => r._ts > 0 && hasUsefulOr(r.orBook, r.orPage))
+    .sort((a, b) => b._ts - a._ts)
+    .slice(0, limit)
+    .map(({ _ts: _a, _price: _b, ...sale }) => sale);
+}
+
+function buildingSummary(payload: Record<string, unknown>): Record<string, unknown> | null {
+  const infos = Array.isArray(payload.buildingInfos) ? payload.buildingInfos : [];
+  if (!infos.length) return null;
+  const primary = infos[0] as Record<string, unknown>;
   return {
-    dateOfSale: top.dateOfSale,
-    salePrice: top.salePrice,
-    instrument: top.instrument,
-    orBook: top.orBook,
-    orPage: top.orPage,
-    grantee: top.grantee,
+    rollYear: num(primary.RollYear),
+    improvementModelDesc: str(primary.improvementModelDesc),
+    percentageGood: num(primary.PercentageGood),
+    replacementCostNew: num(primary.ReplacementCostNew),
+    depreciatedValue: num(primary.DepreciatedValue),
+    heatedArea: num(primary.HeatedArea),
+    grossArea: num(primary.GrossArea),
+    effectiveYear: num(primary.Effective) ?? num(primary.Actual),
+    segments: infos.length,
   };
 }
 
@@ -176,15 +228,73 @@ export function classifyOccupancyFromPa(payload: Record<string, unknown>): Occup
   };
 }
 
-/** Apply sales + beds/baths + occupancy derived from an existing or fresh pa_parcel payload. */
+async function upsertSaleOrDocuments(lotId: string, county: string, sales: PaSale[]) {
+  let written = 0;
+  for (const sale of sales) {
+    if (!sale.orBook || !sale.orPage || !hasUsefulOr(sale.orBook, sale.orPage)) continue;
+    const sourceUrl =
+      county === "miami-dade" ? miamiDadeOrImageUrl(sale.orBook, sale.orPage) : null;
+    if (!sourceUrl) continue;
+
+    const titleParts = [
+      sale.instrument || "OR",
+      `Book ${sale.orBook}`,
+      `Page ${sale.orPage}`,
+      sale.dateOfSale ? `· ${sale.dateOfSale}` : null,
+      sale.salePrice != null && sale.salePrice > 0 ? `· $${sale.salePrice.toLocaleString("en-US")}` : null,
+    ].filter(Boolean);
+
+    const existing = await prisma.document.findFirst({
+      where: { lotId, sourceUrl },
+      select: { id: true },
+    });
+    const data = {
+      docType: "pa_sale_or",
+      title: titleParts.join(" "),
+      sourceUrl,
+      searchScope: "pa_sales_information",
+      evidenceNote: [
+        sale.qualificationDescription,
+        sale.grantor ? `Grantor: ${sale.grantor}` : null,
+        sale.grantee ? `Grantee: ${sale.grantee}` : null,
+        sale.qualifiedFlag ? `Qualified=${sale.qualifiedFlag}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      meta: {
+        source: "pa_salesInfos",
+        dateOfSale: sale.dateOfSale,
+        salePrice: sale.salePrice,
+        instrument: sale.instrument,
+        orBook: sale.orBook,
+        orPage: sale.orPage,
+        grantor: sale.grantor,
+        grantee: sale.grantee,
+        qualifiedFlag: sale.qualifiedFlag,
+        qualificationDescription: sale.qualificationDescription,
+      } as Prisma.InputJsonValue,
+    };
+    if (existing) {
+      await prisma.document.update({ where: { id: existing.id }, data });
+    } else {
+      await prisma.document.create({ data: { lotId, ...data } });
+    }
+    written += 1;
+  }
+  return written;
+}
+
+/** Apply sales + beds/baths + occupancy + OR sale docs derived from pa_parcel payload. */
 export async function applyPaDerivedToLot(lotId: string, payload: Record<string, unknown>) {
   const propertyInfo = (payload.propertyInfo ?? null) as Record<string, unknown> | null;
   const land = (payload.land ?? null) as Record<string, unknown> | null;
   const owners = Array.isArray(payload.ownerInfos) ? payload.ownerInfos : [];
   const ownerFromPa = str((owners[0] as Record<string, unknown> | undefined)?.Name);
   const sale = pickLatestSale(payload.salesInfos);
+  const salesWithOr = listSalesWithOr(payload.salesInfos, 8);
   const saleDate = parseMdY(sale?.dateOfSale ?? null);
   const occupancy = classifyOccupancyFromPa(payload);
+  const building = buildingSummary(payload);
   const legalRaw = payload.legalDescription as Record<string, unknown> | string | null | undefined;
   const legalDescription =
     typeof legalRaw === "string"
@@ -197,8 +307,69 @@ export async function applyPaDerivedToLot(lotId: string, payload: Record<string,
     where: { id: lotId },
     select: { folioNormalized: true, folio: true, propertyId: true, county: true },
   });
+
+  async function writeOccupancy(orDocsWritten = 0) {
+    // Always write-through so a later UNKNOWN refresh does not leave a sticky PASS.
+    await prisma.riskCheck.upsert({
+      where: { lotId_code: { lotId, code: "occupancy" } },
+      update: {
+        result: occupancy.result,
+        blocksBid: occupancy.result !== RiskResult.PASS,
+        evidence: occupancy.evidence,
+        checkedAt: new Date(),
+      },
+      create: {
+        lotId,
+        code: "occupancy",
+        result: occupancy.result,
+        blocksBid: occupancy.result !== RiskResult.PASS,
+        evidence: occupancy.evidence,
+      },
+    });
+
+    const occupancyPayload = {
+      guess: occupancy.guess,
+      homesteadLikely: occupancy.homesteadLikely,
+      mailingMatchesSitus: occupancy.mailingMatchesSitus,
+      evidence: occupancy.evidence,
+      sale,
+      salesWithOr,
+      building,
+      dorDescription:
+        str(propertyInfo?.DORDescription) ||
+        str(propertyInfo?.DORDescriptionCurrent) ||
+        str(land?.dorDesc),
+      zoneDescription: str(propertyInfo?.PrimaryZoneDescription),
+      municipality: str(propertyInfo?.Municipality) || str(land?.city),
+      subdivision: str(propertyInfo?.SubdivisionDescription) || str(land?.subdivision),
+      landValue: num(land?.landValue),
+      buildingValue: num(land?.buildingValue),
+      source: "pa_derived",
+      isGroundTruth: false,
+      orDocsWritten,
+      folioKnown: Boolean(lot?.folioNormalized && lot.folioNormalized !== "UNKNOWN"),
+    } as Prisma.InputJsonValue;
+
+    await prisma.enrichmentLayer.upsert({
+      where: { lotId_name: { lotId, name: "occupancy_proxy" } },
+      update: {
+        status: occupancy.result === RiskResult.PASS ? "OK" : "PARTIAL",
+        payload: occupancyPayload,
+        fetchedAt: new Date(),
+        error: null,
+      },
+      create: {
+        lotId,
+        name: "occupancy_proxy",
+        status: occupancy.result === RiskResult.PASS ? "OK" : "PARTIAL",
+        payload: occupancyPayload,
+      },
+    });
+  }
+
   if (!lot?.folioNormalized || lot.folioNormalized === "UNKNOWN") {
-    return { sale: false, occupancy: occupancy.guess };
+    await writeOccupancy(0);
+    return { sale: false, occupancy: occupancy.guess, orDocs: 0 };
   }
   const paSource =
     lot.county === "broward"
@@ -209,8 +380,8 @@ export async function applyPaDerivedToLot(lotId: string, payload: Record<string,
           ? "monroe_pa"
           : "miami_dade_pa";
 
-  const beds = num(propertyInfo?.BedroomCount);
-  const baths = num(propertyInfo?.BathroomCount);
+  const beds = num(propertyInfo?.BedroomCount) ?? num(land?.beds);
+  const baths = num(propertyInfo?.BathroomCount) ?? num(land?.baths);
   const halfBath = num(propertyInfo?.HalfBathroomCount) ?? 0;
   const bathsTotal = baths != null ? baths + halfBath * 0.5 : null;
   const yearBuiltRaw = propertyInfo?.YearBuilt;
@@ -227,6 +398,25 @@ export async function applyPaDerivedToLot(lotId: string, payload: Record<string,
   const marketFromPa = num(payload.justValue) ?? num(payload.assessedValue);
   const lat = typeof land?.lat === "number" ? land.lat : null;
   const lng = typeof land?.lng === "number" ? land.lng : null;
+  const dorUse =
+    land?.dorCode != null
+      ? String(land.dorCode)
+      : propertyInfo?.DORCode != null
+        ? String(propertyInfo.DORCode)
+        : undefined;
+  const zoning =
+    str(propertyInfo?.PrimaryZone) ||
+    (land?.zoning != null ? String(land.zoning) : undefined) ||
+    undefined;
+
+  const livingSqft =
+    num(propertyInfo?.BuildingHeatedArea) != null
+      ? Math.round(num(propertyInfo?.BuildingHeatedArea)!)
+      : num(land?.buildingHeatedArea) != null
+        ? Math.round(num(land?.buildingHeatedArea)!)
+        : typeof land?.buildingGrossArea === "number"
+          ? Math.round(land.buildingGrossArea)
+          : undefined;
 
   const property = await prisma.property.upsert({
     where: {
@@ -237,16 +427,12 @@ export async function applyPaDerivedToLot(lotId: string, payload: Record<string,
       addressLine: typeof land?.address === "string" ? land.address || undefined : undefined,
       city: typeof land?.city === "string" ? land.city || undefined : undefined,
       zip: land?.zip != null ? String(land.zip) : undefined,
-      dorUse: land?.dorCode != null ? String(land.dorCode) : undefined,
+      dorUse,
+      zoning,
       beds: beds ?? undefined,
       baths: bathsTotal ?? undefined,
       yearBuilt: yearBuilt ?? undefined,
-      livingSqft:
-        num(propertyInfo?.BuildingHeatedArea) != null
-          ? Math.round(num(propertyInfo?.BuildingHeatedArea)!)
-          : typeof land?.buildingGrossArea === "number"
-            ? Math.round(land.buildingGrossArea)
-            : undefined,
+      livingSqft,
       lotSqft: typeof land?.lotSize === "number" ? Math.round(land.lotSize) : undefined,
       assessedValue: assessedFromPa != null ? assessedFromPa : undefined,
       marketValue: marketFromPa != null ? marketFromPa : undefined,
@@ -265,12 +451,12 @@ export async function applyPaDerivedToLot(lotId: string, payload: Record<string,
       addressLine: typeof land?.address === "string" ? land.address || undefined : undefined,
       city: typeof land?.city === "string" ? land.city || undefined : undefined,
       zip: land?.zip != null ? String(land.zip) : undefined,
-      dorUse: land?.dorCode != null ? String(land.dorCode) : undefined,
+      dorUse,
+      zoning,
       beds: beds ?? undefined,
       baths: bathsTotal ?? undefined,
       yearBuilt: yearBuilt ?? undefined,
-      livingSqft:
-        typeof land?.buildingGrossArea === "number" ? Math.round(land.buildingGrossArea) : undefined,
+      livingSqft,
       lotSqft: typeof land?.lotSize === "number" ? Math.round(land.lotSize) : undefined,
       assessedValue: assessedFromPa,
       marketValue: marketFromPa,
@@ -292,56 +478,37 @@ export async function applyPaDerivedToLot(lotId: string, payload: Record<string,
     },
   });
 
-  if (occupancy.result === RiskResult.PASS) {
-    await prisma.riskCheck.upsert({
-      where: { lotId_code: { lotId, code: "occupancy" } },
-      update: {
-        result: RiskResult.PASS,
-        blocksBid: false,
-        evidence: occupancy.evidence,
-        checkedAt: new Date(),
-      },
-      create: {
-        lotId,
-        code: "occupancy",
-        result: RiskResult.PASS,
-        blocksBid: false,
-        evidence: occupancy.evidence,
-      },
-    });
-  }
+  const orDocs = await upsertSaleOrDocuments(lotId, lot.county, salesWithOr);
+  await writeOccupancy(orDocs);
 
-  await prisma.enrichmentLayer.upsert({
+  // Enrich occupancy_proxy with county PA source once property path succeeded.
+  await prisma.enrichmentLayer.update({
     where: { lotId_name: { lotId, name: "occupancy_proxy" } },
-    update: {
-      status: occupancy.result === RiskResult.PASS ? "OK" : "PARTIAL",
+    data: {
       payload: {
         guess: occupancy.guess,
         homesteadLikely: occupancy.homesteadLikely,
         mailingMatchesSitus: occupancy.mailingMatchesSitus,
         evidence: occupancy.evidence,
         sale,
+        salesWithOr,
+        building,
+        dorDescription:
+          str(propertyInfo?.DORDescription) ||
+          str(propertyInfo?.DORDescriptionCurrent) ||
+          str(land?.dorDesc),
+        zoneDescription: str(propertyInfo?.PrimaryZoneDescription),
+        municipality: str(propertyInfo?.Municipality) || str(land?.city),
+        subdivision: str(propertyInfo?.SubdivisionDescription) || str(land?.subdivision),
+        landValue: num(land?.landValue),
+        buildingValue: num(land?.buildingValue),
         source: paSource,
         isGroundTruth: false,
-      },
-      fetchedAt: new Date(),
-      error: null,
-    },
-    create: {
-      lotId,
-      name: "occupancy_proxy",
-      status: occupancy.result === RiskResult.PASS ? "OK" : "PARTIAL",
-      payload: {
-        guess: occupancy.guess,
-        homesteadLikely: occupancy.homesteadLikely,
-        mailingMatchesSitus: occupancy.mailingMatchesSitus,
-        evidence: occupancy.evidence,
-        sale,
-        source: paSource,
-        isGroundTruth: false,
-      },
+        orDocsWritten: orDocs,
+        folioKnown: true,
+      } as Prisma.InputJsonValue,
     },
   });
 
-  return { sale: Boolean(sale), occupancy: occupancy.guess };
+  return { sale: Boolean(sale), occupancy: occupancy.guess, orDocs };
 }

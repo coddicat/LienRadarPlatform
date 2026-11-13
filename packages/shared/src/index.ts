@@ -161,6 +161,39 @@ export function normalizeFolio(raw: string | null | undefined): string {
   return raw.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 }
 
+/**
+ * Normalize sale dates to civil YYYY-MM-DD.
+ * Accepts ISO, US MM/DD/YYYY (RealAuction dayid), and Prisma @db.Date (UTC midnight).
+ */
+export function toCivilDateISO(v: string | Date | null | undefined): string | null {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    const y = v.getUTCFullYear();
+    const m = String(v.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(v.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(v).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) {
+    return `${us[3]}-${us[1].padStart(2, "0")}-${us[2].padStart(2, "0")}`;
+  }
+  const parsed = new Date(s);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return toCivilDateISO(parsed);
+}
+
+/** RealAuction calendar / PREVIEW query param (M/D/YYYY). */
+export function toUsSlashDate(v: string | Date | null | undefined): string | null {
+  const iso = toCivilDateISO(v);
+  if (!iso) return null;
+  const [y, m, d] = iso.split("-");
+  return `${Number(m)}/${Number(d)}/${y}`;
+}
+
 export function lotNaturalKey(parts: {
   county: string;
   channel: string;
@@ -168,10 +201,7 @@ export function lotNaturalKey(parts: {
   folio: string;
   saleDate: string | Date;
 }): string {
-  const sale =
-    typeof parts.saleDate === "string"
-      ? parts.saleDate.slice(0, 10)
-      : parts.saleDate.toISOString().slice(0, 10);
+  const sale = toCivilDateISO(parts.saleDate) ?? "unknown-date";
   return [
     parts.county,
     parts.channel,

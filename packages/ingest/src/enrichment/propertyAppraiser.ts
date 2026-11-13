@@ -26,13 +26,19 @@ const LAND_FIELDS = [
   "PRIMARY_ZONE",
   "LOT_SIZE",
   "BUILDING_GROSS_AREA",
+  "BUILDING_HEATED_AREA",
+  "BEDROOM_COUNT",
+  "BATHROOM_COUNT",
   "LAND_VAL_CUR",
   "BUILDING_VAL_CUR",
   "TOTAL_VAL_CUR",
   "TRUE_OWNER1",
+  "TRUE_OWNER2",
+  "TRUE_OWNER3",
   "YEAR_BUILT",
   "CANCEL_FLAG",
   "CONDO_FLAG",
+  "SUBDIVISION",
 ].join(",");
 
 function folioDigits(folio: string): string {
@@ -184,6 +190,29 @@ export async function enrichPropertyAppraiser(folio: string): Promise<PaParcelRe
 
     const geom = land?._geometry as { x?: number; y?: number } | null | undefined;
     const sales = paJson?.SalesInfos;
+    const building = paJson?.Building as
+      | { BuildingInfos?: Array<Record<string, unknown>> }
+      | undefined;
+    const taxable = paJson?.Taxable as
+      | { TaxableInfos?: Array<Record<string, unknown>> }
+      | undefined;
+    const benefit = paJson?.Benefit as
+      | { BenefitInfos?: Array<Record<string, unknown>> }
+      | undefined;
+    const landDetail = paJson?.Land as
+      | { Landlines?: Array<Record<string, unknown>> }
+      | undefined;
+    const extraFeature = paJson?.ExtraFeature as
+      | { ExtraFeatureInfos?: Array<Record<string, unknown>> }
+      | undefined;
+
+    /** Keep latest roll-year building segments (repair / product signals). */
+    const buildingInfos = [...(building?.BuildingInfos ?? [])].sort(
+      (a, b) => Number(b.RollYear ?? 0) - Number(a.RollYear ?? 0),
+    );
+    const latestRoll = Number(buildingInfos[0]?.RollYear ?? 0);
+    const buildingLatest =
+      latestRoll > 0 ? buildingInfos.filter((b) => Number(b.RollYear ?? 0) === latestRoll) : buildingInfos.slice(0, 4);
 
     return {
       status: LayerStatus.OK,
@@ -200,17 +229,23 @@ export async function enrichPropertyAppraiser(folio: string): Promise<PaParcelRe
               city: land.TRUE_SITE_CITY,
               zip: land.TRUE_SITE_ZIP_CODE,
               owner: land.TRUE_OWNER1,
+              owner2: land.TRUE_OWNER2 ?? null,
+              owner3: land.TRUE_OWNER3 ?? null,
               dorCode: land.DOR_CODE_CUR,
               dorDesc: land.DOR_DESC,
               zoning: land.PRIMARY_ZONE,
               lotSize: land.LOT_SIZE,
               buildingGrossArea: land.BUILDING_GROSS_AREA,
+              buildingHeatedArea: land.BUILDING_HEATED_AREA ?? null,
+              beds: land.BEDROOM_COUNT ?? null,
+              baths: land.BATHROOM_COUNT ?? null,
               landValue: land.LAND_VAL_CUR,
               buildingValue: land.BUILDING_VAL_CUR,
               totalValue: land.TOTAL_VAL_CUR,
               yearBuilt: land.YEAR_BUILT,
               condoFlag: land.CONDO_FLAG,
               cancelFlag: land.CANCEL_FLAG,
+              subdivision: land.SUBDIVISION ?? null,
               lat: geom?.y ?? null,
               lng: geom?.x ?? null,
             }
@@ -223,6 +258,13 @@ export async function enrichPropertyAppraiser(folio: string): Promise<PaParcelRe
         mailingAddress: paJson?.MailingAddress ?? null,
         siteAddress: paJson?.SiteAddress ?? null,
         legalDescription: paJson?.LegalDescription ?? null,
+        // Decision-relevant PA folio panels (same free JSON the SPA uses)
+        assessmentInfos: infos,
+        buildingInfos: buildingLatest,
+        taxableInfos: taxable?.TaxableInfos ?? null,
+        benefitInfos: benefit?.BenefitInfos ?? null,
+        landlines: landDetail?.Landlines ?? null,
+        extraFeatureInfos: extraFeature?.ExtraFeatureInfos ?? null,
       }),
     };
   } catch (e) {

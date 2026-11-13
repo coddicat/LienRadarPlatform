@@ -2,12 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import bcrypt from "bcryptjs";
-import { DATA_RESOURCES, LEGACY_MIAMI_RESOURCE_KEYS, SCHEDULED_JOBS } from "@lienradar/shared";
+import {
+  DATA_RESOURCES,
+  LEGACY_MIAMI_RESOURCE_KEYS,
+  REMOVED_REO_RESOURCE_KEYS,
+  SCHEDULED_JOBS,
+} from "@lienradar/shared";
 import { PrismaClient, ResourceHealth } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
-/** Load repo-root `.env` so requiresEnv checks see AUCTION_COM_ENABLED / etc. */
+/** Load repo-root `.env` so requiresEnv checks see clerk keys / proxies / etc. */
 function loadRootEnv() {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
@@ -112,6 +117,26 @@ async function main() {
     });
   }
 
+  // Auction.com / Hubzu Bank REO sources removed — disable leftover rows + job.
+  for (const key of REMOVED_REO_RESOURCE_KEYS) {
+    await prisma.dataResource.updateMany({
+      where: { key },
+      data: {
+        enabled: false,
+        detail: "Removed — Auction.com / Hubzu Bank REO sources disabled",
+        lastError: null,
+      },
+    });
+  }
+  await prisma.scheduledJob.updateMany({
+    where: { key: "reo_daily" },
+    data: {
+      enabled: false,
+      description: "Removed — Auction.com / Hubzu Bank REO job disabled",
+      lastError: null,
+    },
+  });
+
   // Permanent honest NOT_CONFIGURED — captcha / Turnstile portals with no free path.
   for (const row of [
     {
@@ -134,10 +159,6 @@ async function main() {
       key: "monroe_clerk",
       detail: "Monroe Clerk OR not free until proven",
     },
-    {
-      key: "monroe_pa",
-      detail: "No free folio API proven — NOT_CONFIGURED until a public path exists",
-    },
   ] as const) {
     await prisma.dataResource.updateMany({
       where: { key: row.key },
@@ -154,10 +175,9 @@ async function main() {
       where: { key: j.key },
       update: {
         name: j.name,
-        cronExpr: j.cronExpr,
         description: j.description,
         timezone: j.timezone,
-        enabled: true,
+        // Keep operator-edited cronExpr / enabled as source of truth.
       },
       create: {
         key: j.key,

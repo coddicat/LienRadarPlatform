@@ -15,3 +15,7 @@ packages/db/prisma/*.db-journal
 *.tsbuildinfo
 .cache
 tmp-*.mjs
+
+# Accidental local credential stubs
+AVNS_*
+

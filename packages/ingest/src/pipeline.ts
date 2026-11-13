@@ -13,16 +13,12 @@ import {
   DebtCategory,
   LayerStatus,
   countyResourceKey,
+  floridaDateISO,
   lotNaturalKey,
   normalizeFolio,
   resolveActiveCounties,
+  toCivilDateISO,
 } from "@lienradar/shared";
-import {
-  collectAuctionComMiami,
-  collectHubzuMiami,
-  probeAuctionCom,
-  probeHubzu,
-} from "./adapters/reoMarketplaces.js";
 import { buildCountyAdapters, type CountyAuctionAdapter } from "./adapters/realauction.js";
 import type { AuctionSourceAdapter, NormalizedLotCard } from "./adapters/types.js";
 import { applyClerkAuthNote, probeClerkApi } from "./enrichment/clerkApi.js";
@@ -85,15 +81,21 @@ export async function upsertLotCard(card: NormalizedLotCard) {
     throw new Error(`upsertLotCard: missing county for ${card.source} ${card.caseNumber}`);
   }
   const folioNormalized = normalizeFolio(card.folio);
-  const naturalKey = lotNaturalKey({
+  const civilSale = toCivilDateISO(card.saleDate);
+  if (!civilSale) {
+    throw new Error(`upsertLotCard: bad saleDate ${String(card.saleDate)} for ${card.caseNumber}`);
+  }
+  let naturalKey = lotNaturalKey({
     county,
     channel: card.channel,
     caseNumber: card.caseNumber,
     folio: card.folio || "UNKNOWN",
-    saleDate: card.saleDate,
+    saleDate: civilSale,
   });
-  const saleDate = new Date(card.saleDate);
+  // Prisma @db.Date: store UTC midnight of the civil sale day.
+  const saleDate = new Date(`${civilSale}T00:00:00.000Z`);
   const outcome = classifyOutcomeReason(card.outcomeText);
+  const caseNorm = card.caseNumber.trim().toUpperCase();
 
   const event = await prisma.auctionEvent.upsert({
     where: {
@@ -143,12 +145,55 @@ export async function upsertLotCard(card: NormalizedLotCard) {
     propertyId = property.id;
   }
 
-  const existing = await prisma.lot.findUnique({ where: { naturalKey } });
+  // Identity is case+sale day first. Folio may arrive later — merge UNKNOWN → real folio
+  // onto one row instead of creating a duplicate naturalKey.
+  let existing = await prisma.lot.findUnique({ where: { naturalKey } });
+  if (!existing) {
+    const sameDay = await prisma.lot.findMany({
+      where: { county, channel: card.channel, saleDate },
+      take: 40,
+    });
+    const byCase = sameDay.find((l) => l.caseNumber.trim().toUpperCase() === caseNorm);
+    const byCert =
+      card.certificateNumber || card.taxDeedNumber
+        ? sameDay.find(
+            (l) =>
+              (card.certificateNumber &&
+                l.certificateNumber &&
+                l.certificateNumber === card.certificateNumber) ||
+              (card.taxDeedNumber && l.taxDeedNumber && l.taxDeedNumber === card.taxDeedNumber),
+          )
+        : undefined;
+    const match = byCase ?? byCert;
+    if (match) {
+      const incomingKnown = Boolean(folioNormalized && folioNormalized !== "UNKNOWN");
+      const existingUnknown = !match.folioNormalized || match.folioNormalized === "UNKNOWN";
+      if (match.naturalKey !== naturalKey && (existingUnknown || !incomingKnown)) {
+        const nextKey = incomingKnown && existingUnknown ? naturalKey : match.naturalKey;
+        if (nextKey !== match.naturalKey) {
+          await prisma.lot.update({
+            where: { id: match.id },
+            data: {
+              naturalKey: nextKey,
+              folio: card.folio || match.folio,
+              folioNormalized: folioNormalized || match.folioNormalized,
+            },
+          });
+          naturalKey = nextKey;
+        } else {
+          naturalKey = match.naturalKey;
+        }
+        existing = await prisma.lot.findUnique({ where: { naturalKey } });
+      } else if (match.naturalKey === naturalKey) {
+        existing = match;
+      }
+    }
+  }
 
   const statusGuard = applyStatusGuard({
     nextStatus: card.status,
     prevStatus: existing?.status,
-    newSaleDate: card.saleDate,
+    newSaleDate: civilSale,
     prevSaleDate: existing?.saleDate,
     authority: "platform",
     outcomeText: card.outcomeText,
@@ -157,7 +202,7 @@ export async function upsertLotCard(card: NormalizedLotCard) {
   const bidDecision = decideFinalBid({
     newBid: card.winningBid ?? null,
     appliedStatus: statusGuard.status,
-    newSaleDate: card.saleDate,
+    newSaleDate: civilSale,
     prev: existing
       ? { winningBid: existing.winningBid ? Number(existing.winningBid) : null, saleDate: existing.saleDate }
       : null,
@@ -166,6 +211,7 @@ export async function upsertLotCard(card: NormalizedLotCard) {
   const appliedStatus = statusGuard.status as AuctionStatus;
   const purchaseConfirmed =
     appliedStatus === AuctionStatus.SOLD && bidDecision.value != null && !bidDecision.contradiction;
+  const winningBidStored = bidDecision.contradiction ? null : money(bidDecision.value);
 
   const lot = await prisma.lot.upsert({
     where: { naturalKey },
@@ -175,13 +221,15 @@ export async function upsertLotCard(card: NormalizedLotCard) {
       propertyAddress: card.propertyAddress,
       certificateNumber: card.certificateNumber ?? undefined,
       taxDeedNumber: card.taxDeedNumber ?? undefined,
+      folio: card.folio || undefined,
+      folioNormalized: folioNormalized && folioNormalized !== "UNKNOWN" ? folioNormalized : undefined,
       openingBid: money(card.openingBid),
       judgmentAmount: money(card.judgmentAmount),
       plaintiffMaxBid: money(card.plaintiffMaxBid),
       highBid: money(card.highBid),
-      winningBid: money(bidDecision.value),
-      confirmedSalePrice: purchaseConfirmed ? money(bidDecision.value) : existing?.confirmedSalePrice,
-      purchaseConfirmed: purchaseConfirmed || (existing?.purchaseConfirmed ?? false),
+      winningBid: winningBidStored,
+      confirmedSalePrice: purchaseConfirmed ? money(bidDecision.value) : null,
+      purchaseConfirmed,
       outcomeText: card.outcomeText ?? undefined,
       outcomeCategory: outcome.category,
       // Preserve PA-enriched values when the auction card omits assessed/market.
@@ -208,7 +256,7 @@ export async function upsertLotCard(card: NormalizedLotCard) {
       judgmentAmount: money(card.judgmentAmount),
       plaintiffMaxBid: money(card.plaintiffMaxBid),
       highBid: money(card.highBid),
-      winningBid: money(bidDecision.value),
+      winningBid: winningBidStored,
       confirmedSalePrice: purchaseConfirmed ? money(bidDecision.value) : null,
       purchaseConfirmed,
       outcomeText: card.outcomeText ?? null,
@@ -266,7 +314,7 @@ export async function upsertLotCard(card: NormalizedLotCard) {
             title: doc.title ?? undefined,
             evidenceNote: doc.evidenceNote ?? undefined,
             searchScope: "auction_preview_link",
-            meta: { source: card.source, saleDate: card.saleDate } as Prisma.InputJsonValue,
+            meta: { source: card.source, saleDate: civilSale } as Prisma.InputJsonValue,
           },
         });
       } else {
@@ -278,7 +326,7 @@ export async function upsertLotCard(card: NormalizedLotCard) {
             sourceUrl: doc.sourceUrl,
             evidenceNote: doc.evidenceNote ?? null,
             searchScope: "auction_preview_link",
-            meta: { source: card.source, saleDate: card.saleDate },
+            meta: { source: card.source, saleDate: civilSale },
           },
         });
       }
@@ -446,13 +494,16 @@ export async function runCalendarAndLots(jobKey = "calendar_6h") {
   const run = await startRun("CALENDAR");
   await markJobStart(jobKey);
   try {
-    // Include recent past for outcomes + upcoming window.
-    const from = new Date();
-    from.setUTCHours(0, 0, 0, 0);
-    from.setUTCDate(from.getUTCDate() - 14);
-    const to = new Date();
-    to.setUTCHours(0, 0, 0, 0);
-    to.setUTCDate(to.getUTCDate() + 56);
+    // Full calendar: past outcomes + upcoming window (Florida civil day, not UTC clock).
+    // Day-of refresh: tight window around today (avoid replaying ± weeks every 30m).
+    const pastDays = jobKey === "day_refresh_30m" ? 1 : 14;
+    const futureDays = jobKey === "day_refresh_30m" ? 2 : 56;
+    const todayCivil = floridaDateISO();
+    const todayUtc = new Date(`${todayCivil}T00:00:00.000Z`);
+    const from = new Date(todayUtc);
+    from.setUTCDate(from.getUTCDate() - pastDays);
+    const to = new Date(todayUtc);
+    to.setUTCDate(to.getUTCDate() + futureDays);
 
     const adapters = buildCountyAdapters();
     const results: Array<{
@@ -907,15 +958,33 @@ export async function runMuniEnrichment(limit = 80, jobKey = "enrich_muni_6h") {
 }
 
 /** Scaffold UNKNOWN inputs if needed, then recompute BidGate for every lot. */
-export async function runMethod(limit = 500, jobKey = "method_nightly") {
+export async function runMethod(limit = 1500, jobKey = "method_nightly") {
   const run = await startRun("METHOD");
   await markJobStart(jobKey);
   try {
-    const lots = await prisma.lot.findMany({
+    // Prefer upcoming / current sale dates so stale gates on live inventory refresh first.
+    const todayCivil = floridaDateISO();
+    const todayUtc = new Date(`${todayCivil}T00:00:00.000Z`);
+    const upcoming = await prisma.lot.findMany({
+      where: { saleDate: { gte: todayUtc } },
       take: limit,
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ saleDate: "asc" }, { updatedAt: "desc" }],
       include: { debts: true, mortgages: true, risks: true },
     });
+    const remaining = Math.max(0, limit - upcoming.length);
+    const recentPast =
+      remaining > 0
+        ? await prisma.lot.findMany({
+            where: {
+              saleDate: { lt: todayUtc },
+              id: { notIn: upcoming.map((l) => l.id) },
+            },
+            take: remaining,
+            orderBy: { updatedAt: "desc" },
+            include: { debts: true, mortgages: true, risks: true },
+          })
+        : [];
+    const lots = [...upcoming, ...recentPast];
     let updated = 0;
     let scaffolded = 0;
     let judgmentMortgage = 0;
@@ -961,6 +1030,7 @@ export async function runMethod(limit = 500, jobKey = "method_nightly") {
           where: { lotId: lot.id, code: "bankruptcy", result: "UNKNOWN" },
           data: {
             result: "PASS",
+            blocksBid: false,
             evidence:
               "OCS docket scanned — no bankruptcy mention (docket-only; repaired from prior enrich)",
             checkedAt: new Date(),
@@ -1451,93 +1521,6 @@ export async function runOfficialRecordsEnrichment(jobKey = "enrich_or_nightly",
   }
 }
 
-export async function runReoSources(jobKey = "reo_daily") {
-  const run = await startRun("LOTS");
-  await markJobStart(jobKey);
-  const results: Record<string, unknown> = {};
-  let upserted = 0;
-
-  async function ingestMarketplace(
-    key: "auction_com_reo" | "hubzu_reo",
-    envName: "AUCTION_COM_ENABLED" | "HUBZU_ENABLED",
-    probeFn: () => Promise<{ ok: boolean; error?: string; detail?: string }>,
-    collectFn: () => Promise<{
-      ok: boolean;
-      listings: NormalizedLotCard[];
-      error?: string;
-      detail?: string;
-    }>,
-  ) {
-    if (process.env[envName] !== "1") {
-      await setResourceStatus({
-        key,
-        status: ResourceHealth.NOT_CONFIGURED,
-        detail: `Set ${envName}=1 after approving a live feed. No fixture lots are written.`,
-        lastError: null,
-      });
-      results[key] = { status: "NOT_CONFIGURED" };
-      return;
-    }
-
-    const probe = await probeFn();
-    if (!probe.ok) {
-      await setResourceStatus({
-        key,
-        status: ResourceHealth.DOWN,
-        detail: "Marketplace probe failed",
-        lastError: probe.error ?? "down",
-      });
-      results[key] = { status: "DOWN", error: probe.error };
-      return;
-    }
-
-    const collected = await collectFn();
-    if (!collected.ok) {
-      await setResourceStatus({
-        key,
-        status: ResourceHealth.DEGRADED,
-        detail: collected.detail ?? "Live collect failed",
-        lastError: collected.error ?? "collect_failed",
-        success: false,
-      });
-      results[key] = { status: "DEGRADED", error: collected.error, listings: 0 };
-      return;
-    }
-
-    let ok = 0;
-    for (const card of collected.listings) {
-      await upsertLotCard(card);
-      ok += 1;
-      upserted += 1;
-    }
-    await setResourceStatus({
-      key,
-      status: ok > 0 ? ResourceHealth.OK : ResourceHealth.DEGRADED,
-      detail: collected.detail ?? `Collected ${ok} BANK_REO listings`,
-      lastError: ok > 0 ? null : "zero_listings",
-      success: ok > 0,
-    });
-    results[key] = { status: ok > 0 ? "OK" : "DEGRADED", listings: ok };
-  }
-
-  try {
-    await ingestMarketplace("auction_com_reo", "AUCTION_COM_ENABLED", probeAuctionCom, () =>
-      collectAuctionComMiami(100),
-    );
-    await ingestMarketplace("hubzu_reo", "HUBZU_ENABLED", probeHubzu, () => collectHubzuMiami(40));
-
-    const counts = { upserted, marketplaces: Object.keys(results).length };
-    await finishRun(run.id, upserted > 0 ? "SUCCESS" : "PARTIAL", counts, JSON.stringify(results));
-    await markJobFinish(jobKey, upserted > 0 ? "SUCCESS" : "PARTIAL", counts);
-    return { ...counts, results };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await finishRun(run.id, "FAILED", { upserted }, msg);
-    await markJobFinish(jobKey, "FAILED", { upserted }, msg);
-    return { ok: false, error: msg, results };
-  }
-}
-
 export async function runHealth() {
   const run = await startRun("HEALTH");
   const lotCount = await prisma.lot.count();
@@ -1565,8 +1548,6 @@ export async function runJob(jobKey: string) {
       return runOfficialRecordsEnrichment(jobKey, 40);
     case "enrich_tax_nightly":
       return runTaxCollectorEnrichment(jobKey, 250);
-    case "reo_daily":
-      return runReoSources(jobKey);
     case "method_nightly":
       return runMethod(500, jobKey);
     case "nightly": {
@@ -1613,9 +1594,8 @@ export async function runJob(jobKey: string) {
       const clerk = await runCourtOcsEnrichment(40, "enrich_clerk_nightly");
       const tax = await runTaxCollectorEnrichment("enrich_tax_nightly", 250);
       const or = await runOfficialRecordsEnrichment("enrich_or_nightly", 15);
-      const reo = await runReoSources();
       const method = await runMethod(500);
-      return { health, calendar, folio, enrich, muni, flood, clerk, tax, or, reo, method };
+      return { health, calendar, folio, enrich, muni, flood, clerk, tax, or, method };
     }
     default:
       throw new Error(`Unknown job: ${jobKey}`);

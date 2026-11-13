@@ -308,7 +308,7 @@ export async function applyCourtOcs(lotId: string, caseNumber: string, result: O
         where: { lotId_code: { lotId, code: "bankruptcy" } },
         update: {
           result: RiskResult.PASS,
-          blocksBid: true,
+          blocksBid: false,
           evidence:
             "OCS docket scanned — no bankruptcy mention (docket-only; not a PACER/nationwide search)",
           checkedAt: new Date(),
@@ -317,7 +317,7 @@ export async function applyCourtOcs(lotId: string, caseNumber: string, result: O
           lotId,
           code: "bankruptcy",
           result: RiskResult.PASS,
-          blocksBid: true,
+          blocksBid: false,
           evidence:
             "OCS docket scanned — no bankruptcy mention (docket-only; not a PACER/nationwide search)",
         },

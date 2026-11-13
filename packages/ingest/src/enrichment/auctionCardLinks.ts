@@ -402,12 +402,22 @@ export async function enrichLotAuctionLinks(lotId: string): Promise<{
           note: "Palm Beach erec viewer is session/SPA — link retained; no free document body scrape",
         },
       };
-    } else if (/miamidade\.gov\/Apps\/PA\/propertysearch/i.test(url)) {
+    } else if (
+      /miamidade\.gov\/Apps\/PA\/propertysearch/i.test(url) ||
+      /apps\.miamidadepa\.gov\/PropertySearch/i.test(url) ||
+      /apps\.miamidadepa\.gov\/PApublicServiceProxy/i.test(url)
+    ) {
+      const folioFromUrl =
+        url.match(/[?&#]folio=([0-9-]+)/i)?.[1] ||
+        url.match(/folioNumber=([0-9-]+)/i)?.[1] ||
+        null;
       result = {
         status: LayerStatus.PARTIAL,
         payload: {
           url,
-          note: "Miami-Dade PA SPA link retained; folio enrichment uses ArcGIS/JSON PA adapters",
+          folioFromUrl,
+          note:
+            "Miami-Dade PA SPA/link retained; folio enrichment uses free ArcGIS + GetPropertySearchByFolio JSON (Sales OR Book-Page → Documents)",
         },
       };
     }

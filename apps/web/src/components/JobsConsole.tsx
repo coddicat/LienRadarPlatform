@@ -4,6 +4,7 @@ import { ACTIVE_COUNTIES } from "@lienradar/shared";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useI18n } from "@/components/I18nProvider";
 import { ScheduleEditor, formatScheduleSummary } from "@/components/ScheduleEditor";
+import { RunPullDetails } from "@/components/RunPullDetails";
 import { MultiSelect } from "@/components/ui/MultiSelect";
 import { SearchBar } from "@/components/ui/SearchBar";
 import { Switch } from "@/components/ui/Switch";
@@ -262,7 +263,6 @@ export function JobsConsole({
       "enrich_clerk_nightly",
       "enrich_tax_nightly",
       "enrich_or_nightly",
-      "reo_daily",
       "method_nightly",
     ]);
     // Optimistic: mark target job(s) RUNNING immediately (esp. "Refresh everything").
@@ -809,6 +809,15 @@ export function JobsConsole({
                       <div>{summaryText(r.counts)}</div>
                     )}
                     {r.notes ? <div className="row-meta">{r.notes}</div> : null}
+                    {r.counts ? (
+                      <details style={{ marginTop: 6 }}>
+                        <summary style={{ cursor: "pointer" }}>{t("admin.fullCounts")}</summary>
+                        <pre className="pull-json" style={{ marginTop: 6 }}>
+                          {JSON.stringify(r.counts, null, 2)}
+                        </pre>
+                      </details>
+                    ) : null}
+                    <RunPullDetails runId={r.id} />
                   </td>
                 </tr>
                 );

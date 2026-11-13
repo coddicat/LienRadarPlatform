@@ -8,6 +8,7 @@ import { StatusPill } from "@/components/StatusPill";
 import { DealForm } from "@/components/DealForm";
 import { ManualDdForm } from "@/components/ManualDdForm";
 import { PropertyMap } from "@/components/PropertyMap";
+import { PullDetails } from "@/components/PullDetails";
 import { authOptions } from "@/lib/auth";
 import { dealValue, discountPct, num, spreadUsd } from "@/lib/dealMetrics";
 import { countyLabel } from "@/lib/countyLabel";
@@ -42,8 +43,12 @@ export default async function LotDetailPage({
       debts: { orderBy: { category: "asc" } },
       mortgages: true,
       risks: { orderBy: { code: "asc" } },
-      events: { orderBy: { createdAt: "desc" }, take: 20 },
-      layers: { select: { id: true, name: true, status: true, fetchedAt: true, error: true, payload: true } },
+      events: { orderBy: { createdAt: "desc" }, take: 50 },
+      observations: { orderBy: { fetchedAt: "desc" }, take: 50 },
+      layers: {
+        select: { id: true, name: true, status: true, fetchedAt: true, error: true, payload: true },
+        orderBy: { fetchedAt: "desc" },
+      },
       deals: session?.user ? { where: { userId: (session.user as { id?: string }).id } } : false,
     },
   });
@@ -59,8 +64,37 @@ export default async function LotDetailPage({
   const occupancyLayer = lot.layers.find((l) => l.name === "occupancy_proxy");
   const occupancyPayload =
     occupancyLayer?.payload && typeof occupancyLayer.payload === "object"
-      ? (occupancyLayer.payload as { guess?: string | null; evidence?: string | null })
+      ? (occupancyLayer.payload as {
+          guess?: string | null;
+          evidence?: string | null;
+          dorDescription?: string | null;
+          zoneDescription?: string | null;
+          municipality?: string | null;
+          subdivision?: string | null;
+          landValue?: number | null;
+          buildingValue?: number | null;
+          building?: {
+            improvementModelDesc?: string | null;
+            percentageGood?: number | null;
+            replacementCostNew?: number | null;
+            depreciatedValue?: number | null;
+            heatedArea?: number | null;
+            rollYear?: number | null;
+          } | null;
+          salesWithOr?: Array<{
+            dateOfSale?: string | null;
+            salePrice?: number | null;
+            instrument?: string | null;
+            orBook?: string | null;
+            orPage?: string | null;
+            grantor?: string | null;
+            grantee?: string | null;
+            qualifiedFlag?: string | null;
+            qualificationDescription?: string | null;
+          }>;
+        })
       : null;
+  const paSaleDocs = lot.documents.filter((d) => d.docType === "pa_sale_or");
 
   const method = applyMethodToLot(lot, methodSettings);
   const barriers = method.barriers;
@@ -80,6 +114,7 @@ export default async function LotDetailPage({
     ["gate", t("lotDetail.tabs.gate")],
     ["auction", t("lotDetail.tabs.auction")],
     ["property", t("lotDetail.tabs.property")],
+    ["pulls", t("lotDetail.tabs.pulls")],
     ["money", t("lotDetail.tabs.money")],
     ["debts", t("lotDetail.tabs.debts")],
     ["mortgage", t("lotDetail.tabs.mortgage")],
@@ -262,13 +297,85 @@ export default async function LotDetailPage({
             <dt>{t("lotDetail.livingSqft")}</dt><dd>{lot.property?.livingSqft ?? "—"}</dd>
             <dt>{t("lotDetail.lotSqft")}</dt><dd>{lot.property?.lotSqft ?? "—"}</dd>
             <dt>{t("lotDetail.yearBuilt")}</dt><dd>{lot.property?.yearBuilt ?? "—"}</dd>
-            <dt>{t("lotDetail.zoningDor")}</dt><dd>{lot.property?.zoning ?? "—"} / {lot.property?.dorUse ?? "—"}</dd>
+            <dt>{t("lotDetail.zoningDor")}</dt>
+            <dd>
+              {lot.property?.zoning ?? "—"} / {lot.property?.dorUse ?? "—"}
+              {occupancyPayload?.zoneDescription ? (
+                <div className="muted">{occupancyPayload.zoneDescription}</div>
+              ) : null}
+              {occupancyPayload?.dorDescription ? (
+                <div className="muted">{occupancyPayload.dorDescription}</div>
+              ) : null}
+            </dd>
+            <dt>{t("lotDetail.municipality")}</dt>
+            <dd>
+              {occupancyPayload?.municipality ?? lot.property?.city ?? "—"}
+              {occupancyPayload?.subdivision ? (
+                <div className="muted">{occupancyPayload.subdivision}</div>
+              ) : null}
+            </dd>
             <dt>{t("lotDetail.assessedMarket")}</dt><dd>{usd(lot.property?.assessedValue)} / {usd(lot.property?.marketValue)}</dd>
+            <dt>{t("lotDetail.landBuildingValue")}</dt>
+            <dd>
+              {occupancyPayload?.landValue != null || occupancyPayload?.buildingValue != null
+                ? `${usd(occupancyPayload?.landValue ?? null)} / ${usd(occupancyPayload?.buildingValue ?? null)}`
+                : "—"}
+            </dd>
+            <dt>{t("lotDetail.buildingCondition")}</dt>
+            <dd>
+              {occupancyPayload?.building?.improvementModelDesc ||
+              occupancyPayload?.building?.percentageGood != null ? (
+                <>
+                  {occupancyPayload.building?.improvementModelDesc ?? "—"}
+                  {occupancyPayload.building?.percentageGood != null
+                    ? ` · ${occupancyPayload.building.percentageGood}% good`
+                    : ""}
+                  {occupancyPayload.building?.replacementCostNew != null
+                    ? ` · RCN ${usd(occupancyPayload.building.replacementCostNew)}`
+                    : ""}
+                  {occupancyPayload.building?.depreciatedValue != null
+                    ? ` · depr ${usd(occupancyPayload.building.depreciatedValue)}`
+                    : ""}
+                  {occupancyPayload.building?.rollYear != null ? (
+                    <div className="muted">Roll {occupancyPayload.building.rollYear}</div>
+                  ) : null}
+                </>
+              ) : (
+                "—"
+              )}
+            </dd>
             <dt>{t("lotDetail.lastSale")}</dt>
             <dd>
               {lot.property?.lastSaleDate
                 ? `${ymd(lot.property.lastSaleDate)} · ${usd(lot.property.lastSalePrice)}`
                 : "—"}
+            </dd>
+            <dt>{t("lotDetail.salesOrHistory")}</dt>
+            <dd>
+              {paSaleDocs.length === 0 && !(occupancyPayload?.salesWithOr?.length) ? (
+                <span className="muted">—</span>
+              ) : null}
+              {paSaleDocs.map((d) => (
+                <div key={d.id} style={{ marginBottom: 6 }}>
+                  {d.sourceUrl ? (
+                    <a href={d.sourceUrl} target="_blank" rel="noreferrer">
+                      {d.title || t("lotDetail.open")}
+                    </a>
+                  ) : (
+                    d.title || "—"
+                  )}
+                  {d.evidenceNote ? <div className="muted">{d.evidenceNote}</div> : null}
+                </div>
+              ))}
+              {paSaleDocs.length === 0 && occupancyPayload?.salesWithOr
+                ? occupancyPayload.salesWithOr.map((s, i) => (
+                    <div key={`${s.orBook}-${s.orPage}-${i}`} className="muted" style={{ marginBottom: 4 }}>
+                      {[s.dateOfSale, s.instrument, s.orBook && s.orPage ? `OR ${s.orBook}/${s.orPage}` : null, s.salePrice != null ? usd(s.salePrice) : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                  ))
+                : null}
             </dd>
             <dt>{t("lotDetail.coordinates")}</dt>
             <dd className="mono">
@@ -297,10 +404,40 @@ export default async function LotDetailPage({
             <dd>
               {lot.layers.length === 0 ? <span className="muted">—</span> : null}
               {lot.layers.map((l) => (
-                <div key={l.id} className="muted">{l.name}: {l.status}</div>
+                <div key={l.id} className="muted">
+                  {l.name}: {l.status}
+                  {l.fetchedAt ? ` · ${formatWhen(l.fetchedAt)}` : ""}
+                </div>
               ))}
+              <div style={{ marginTop: 8 }}>
+                <Link href={`/lots/${lot.id}?tab=pulls`}>{t("lotDetail.viewPullDetails")}</Link>
+              </div>
             </dd>
           </dl>
+        ) : null}
+
+        {tab === "pulls" ? (
+          <PullDetails
+            observations={lot.observations}
+            layers={lot.layers}
+            events={lot.events}
+            labels={{
+              hint: t("lotDetail.pullsHint"),
+              observations: t("lotDetail.pullObservations"),
+              layers: t("lotDetail.pullLayers"),
+              events: t("lotDetail.pullEvents"),
+              empty: t("lotDetail.pullsEmpty"),
+              source: t("lotDetail.source"),
+              externalId: t("lotDetail.pullExternalId"),
+              fetched: t("lotDetail.pullFetched"),
+              hash: t("lotDetail.pullHash"),
+              payload: t("lotDetail.pullPayload"),
+              status: t("common.status"),
+              error: t("lotDetail.pullError"),
+              kind: t("lotDetail.pullKind"),
+              message: t("lotDetail.pullMessage"),
+            }}
+          />
         ) : null}
 
         {tab === "money" ? (

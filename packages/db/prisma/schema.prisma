@@ -327,6 +327,7 @@ model Document {
   evidenceNote String?
   meta         Json?
   createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
 
   @@index([lotId, docType])
 }
