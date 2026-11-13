@@ -8,6 +8,7 @@ import { StatusPill } from "@/components/StatusPill";
 import { DealForm } from "@/components/DealForm";
 import { ManualDdForm } from "@/components/ManualDdForm";
 import { PropertyMap } from "@/components/PropertyMap";
+import { LotPropertyDossier } from "@/components/LotPropertyDossier";
 import { PullDetails } from "@/components/PullDetails";
 import { authOptions } from "@/lib/auth";
 import { dealValue, discountPct, num, spreadUsd } from "@/lib/dealMetrics";
@@ -285,135 +286,100 @@ export default async function LotDetailPage({
         ) : null}
 
         {tab === "property" ? (
-          <dl className="kv">
-            <dt>{t("common.folio")}</dt><dd className="mono">{lot.folio}</dd>
-            <dt>{t("common.address")}</dt><dd>{lot.property?.addressLine ?? lot.propertyAddress ?? "—"}</dd>
-            <dt>{t("lotDetail.cityZip")}</dt>
-            <dd>
-              {[lot.property?.city, lot.property?.zip].filter(Boolean).join(" ") || "—"}
-            </dd>
-            <dt>{t("lotDetail.owner")}</dt><dd>{lot.property?.ownerName ?? "—"}</dd>
-            <dt>{t("lotDetail.bedsBaths")}</dt><dd>{lot.property?.beds ?? "—"} / {lot.property?.baths ?? "—"}</dd>
-            <dt>{t("lotDetail.livingSqft")}</dt><dd>{lot.property?.livingSqft ?? "—"}</dd>
-            <dt>{t("lotDetail.lotSqft")}</dt><dd>{lot.property?.lotSqft ?? "—"}</dd>
-            <dt>{t("lotDetail.yearBuilt")}</dt><dd>{lot.property?.yearBuilt ?? "—"}</dd>
-            <dt>{t("lotDetail.zoningDor")}</dt>
-            <dd>
-              {lot.property?.zoning ?? "—"} / {lot.property?.dorUse ?? "—"}
-              {occupancyPayload?.zoneDescription ? (
-                <div className="muted">{occupancyPayload.zoneDescription}</div>
-              ) : null}
-              {occupancyPayload?.dorDescription ? (
-                <div className="muted">{occupancyPayload.dorDescription}</div>
-              ) : null}
-            </dd>
-            <dt>{t("lotDetail.municipality")}</dt>
-            <dd>
-              {occupancyPayload?.municipality ?? lot.property?.city ?? "—"}
-              {occupancyPayload?.subdivision ? (
-                <div className="muted">{occupancyPayload.subdivision}</div>
-              ) : null}
-            </dd>
-            <dt>{t("lotDetail.assessedMarket")}</dt><dd>{usd(lot.property?.assessedValue)} / {usd(lot.property?.marketValue)}</dd>
-            <dt>{t("lotDetail.landBuildingValue")}</dt>
-            <dd>
-              {occupancyPayload?.landValue != null || occupancyPayload?.buildingValue != null
-                ? `${usd(occupancyPayload?.landValue ?? null)} / ${usd(occupancyPayload?.buildingValue ?? null)}`
-                : "—"}
-            </dd>
-            <dt>{t("lotDetail.buildingCondition")}</dt>
-            <dd>
-              {occupancyPayload?.building?.improvementModelDesc ||
-              occupancyPayload?.building?.percentageGood != null ? (
-                <>
-                  {occupancyPayload.building?.improvementModelDesc ?? "—"}
-                  {occupancyPayload.building?.percentageGood != null
-                    ? ` · ${occupancyPayload.building.percentageGood}% good`
-                    : ""}
-                  {occupancyPayload.building?.replacementCostNew != null
-                    ? ` · RCN ${usd(occupancyPayload.building.replacementCostNew)}`
-                    : ""}
-                  {occupancyPayload.building?.depreciatedValue != null
-                    ? ` · depr ${usd(occupancyPayload.building.depreciatedValue)}`
-                    : ""}
-                  {occupancyPayload.building?.rollYear != null ? (
-                    <div className="muted">Roll {occupancyPayload.building.rollYear}</div>
-                  ) : null}
-                </>
-              ) : (
-                "—"
-              )}
-            </dd>
-            <dt>{t("lotDetail.lastSale")}</dt>
-            <dd>
-              {lot.property?.lastSaleDate
-                ? `${ymd(lot.property.lastSaleDate)} · ${usd(lot.property.lastSalePrice)}`
-                : "—"}
-            </dd>
-            <dt>{t("lotDetail.salesOrHistory")}</dt>
-            <dd>
-              {paSaleDocs.length === 0 && !(occupancyPayload?.salesWithOr?.length) ? (
-                <span className="muted">—</span>
-              ) : null}
-              {paSaleDocs.map((d) => (
-                <div key={d.id} style={{ marginBottom: 6 }}>
-                  {d.sourceUrl ? (
-                    <a href={d.sourceUrl} target="_blank" rel="noreferrer">
-                      {d.title || t("lotDetail.open")}
-                    </a>
-                  ) : (
-                    d.title || "—"
-                  )}
-                  {d.evidenceNote ? <div className="muted">{d.evidenceNote}</div> : null}
-                </div>
-              ))}
-              {paSaleDocs.length === 0 && occupancyPayload?.salesWithOr
-                ? occupancyPayload.salesWithOr.map((s, i) => (
-                    <div key={`${s.orBook}-${s.orPage}-${i}`} className="muted" style={{ marginBottom: 4 }}>
-                      {[s.dateOfSale, s.instrument, s.orBook && s.orPage ? `OR ${s.orBook}/${s.orPage}` : null, s.salePrice != null ? usd(s.salePrice) : null]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </div>
-                  ))
-                : null}
-            </dd>
-            <dt>{t("lotDetail.coordinates")}</dt>
-            <dd className="mono">
-              {lot.property?.lat != null && lot.property?.lng != null
-                ? `${lot.property.lat.toFixed(5)}, ${lot.property.lng.toFixed(5)}`
-                : "—"}
-            </dd>
-            <dt>{t("lotDetail.floodZone")}</dt>
-            <dd>
-              {floodPayload?.zone
+          <LotPropertyDossier
+            lotId={lot.id}
+            folio={lot.folio}
+            propertyAddress={lot.propertyAddress}
+            property={lot.property}
+            layers={lot.layers}
+            saleDocs={paSaleDocs}
+            floodText={
+              floodPayload?.zone
                 ? `${floodPayload.zone}${floodPayload.subtype ? ` · ${floodPayload.subtype}` : ""}${
                     floodPayload.sfha != null ? ` · SFHA ${floodPayload.sfha ? "yes" : "no"}` : ""
                   }${floodPayload.source ? ` · ${floodPayload.source}` : ""}`
-                : floodRisk?.evidence ?? "—"}
-            </dd>
-            <dt>{t("lotDetail.occupancyProxy")}</dt>
-            <dd>
-              {occupancyPayload?.guess
+                : floodRisk?.evidence ?? "—"
+            }
+            occupancyText={
+              occupancyPayload?.guess
                 ? `${occupancyPayload.guess.replaceAll("_", " ")}${
                     occupancyPayload.evidence ? ` — ${occupancyPayload.evidence}` : ""
                   }`
-                : occupancyRisk?.evidence ?? "—"}
-            </dd>
-            <dt>{t("lotDetail.legal")}</dt><dd>{lot.property?.legalDescription ?? "—"}</dd>
-            <dt>{t("lotDetail.enrichmentLayers")}</dt>
-            <dd>
-              {lot.layers.length === 0 ? <span className="muted">—</span> : null}
-              {lot.layers.map((l) => (
-                <div key={l.id} className="muted">
-                  {l.name}: {l.status}
-                  {l.fetchedAt ? ` · ${formatWhen(l.fetchedAt)}` : ""}
-                </div>
-              ))}
-              <div style={{ marginTop: 8 }}>
-                <Link href={`/lots/${lot.id}?tab=pulls`}>{t("lotDetail.viewPullDetails")}</Link>
-              </div>
-            </dd>
-          </dl>
+                : occupancyRisk?.evidence ?? "—"
+            }
+            labels={{
+              folio: t("common.folio"),
+              address: t("common.address"),
+              cityZip: t("lotDetail.cityZip"),
+              owner: t("lotDetail.owner"),
+              mailing: t("lotDetail.mailing"),
+              bedsBaths: t("lotDetail.bedsBaths"),
+              floorsUnits: t("lotDetail.floorsUnits"),
+              livingSqft: t("lotDetail.livingSqft"),
+              actualAdjustedSqft: t("lotDetail.actualAdjustedSqft"),
+              lotSqft: t("lotDetail.lotSqft"),
+              yearBuilt: t("lotDetail.yearBuilt"),
+              zoningDor: t("lotDetail.zoningDor"),
+              municipality: t("lotDetail.municipality"),
+              status: t("common.status"),
+              assessedMarket: t("lotDetail.assessedMarket"),
+              landBuildingValue: t("lotDetail.landBuildingValue"),
+              lastSale: t("lotDetail.lastSale"),
+              coordinates: t("lotDetail.coordinates"),
+              floodZone: t("lotDetail.floodZone"),
+              occupancyProxy: t("lotDetail.occupancyProxy"),
+              legal: t("lotDetail.legal"),
+              enrichmentLayers: t("lotDetail.enrichmentLayers"),
+              viewPullDetails: t("lotDetail.viewPullDetails"),
+              open: t("lotDetail.open"),
+              paMissing: t("lotDetail.paMissing"),
+              sectionIdentity: t("lotDetail.sectionIdentity"),
+              sectionAssessments: t("lotDetail.sectionAssessments"),
+              sectionBenefits: t("lotDetail.sectionBenefits"),
+              sectionTaxable: t("lotDetail.sectionTaxable"),
+              sectionSales: t("lotDetail.sectionSales"),
+              sectionLand: t("lotDetail.sectionLand"),
+              sectionBuilding: t("lotDetail.sectionBuilding"),
+              sectionExtras: t("lotDetail.sectionExtras"),
+              sectionRisk: t("lotDetail.sectionRisk"),
+              year: t("lotDetail.year"),
+              marketValue: t("lotDetail.marketValue"),
+              assessedValue: t("lotDetail.assessedValue"),
+              landValue: t("lotDetail.landValue"),
+              buildingValue: t("lotDetail.buildingValue"),
+              extraFeatureValue: t("lotDetail.extraFeatureValue"),
+              description: t("lotDetail.description"),
+              type: t("lotDetail.type"),
+              value: t("lotDetail.value"),
+              countyExempt: t("lotDetail.countyExempt"),
+              countyTaxable: t("lotDetail.countyTaxable"),
+              schoolExempt: t("lotDetail.schoolExempt"),
+              schoolTaxable: t("lotDetail.schoolTaxable"),
+              cityExempt: t("lotDetail.cityExempt"),
+              cityTaxable: t("lotDetail.cityTaxable"),
+              regionalExempt: t("lotDetail.regionalExempt"),
+              regionalTaxable: t("lotDetail.regionalTaxable"),
+              saleDate: t("lotDetail.saleDate"),
+              salePrice: t("lotDetail.salePrice"),
+              instrument: t("lotDetail.instrument"),
+              orBookPage: t("lotDetail.orBookPage"),
+              grantor: t("lotDetail.grantor"),
+              grantee: t("lotDetail.grantee"),
+              qualification: t("lotDetail.qualification"),
+              landUse: t("lotDetail.landUse"),
+              zone: t("lotDetail.zone"),
+              units: t("lotDetail.units"),
+              calcValue: t("lotDetail.calcValue"),
+              buildingNo: t("lotDetail.buildingNo"),
+              actualArea: t("lotDetail.actualArea"),
+              heatedArea: t("lotDetail.heatedArea"),
+              adjustedArea: t("lotDetail.adjustedArea"),
+              pctGood: t("lotDetail.pctGood"),
+              rcn: t("lotDetail.rcn"),
+              depreciated: t("lotDetail.depreciated"),
+              empty: t("lotDetail.empty"),
+            }}
+          />
         ) : null}
 
         {tab === "pulls" ? (

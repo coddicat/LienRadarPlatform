@@ -1,5 +1,7 @@
 import { LayerStatus } from "@lienradar/shared";
 import { Prisma, prisma } from "@lienradar/db";
+import { applyPaDerivedToLot } from "./paDerived.js";
+import { enrichPropertyAppraiser } from "./propertyAppraiser.js";
 
 /**
  * Follow RealAuction preview outbound links (Case # / Parcel ID) and pull public metadata.
@@ -410,16 +412,63 @@ export async function enrichLotAuctionLinks(lotId: string): Promise<{
       const folioFromUrl =
         url.match(/[?&#]folio=([0-9-]+)/i)?.[1] ||
         url.match(/folioNumber=([0-9-]+)/i)?.[1] ||
+        lot.folioNormalized ||
+        lot.folio ||
         null;
-      result = {
-        status: LayerStatus.PARTIAL,
-        payload: {
-          url,
-          folioFromUrl,
-          note:
-            "Miami-Dade PA SPA/link retained; folio enrichment uses free ArcGIS + GetPropertySearchByFolio JSON (Sales OR Book-Page → Documents)",
-        },
-      };
+      if (!folioFromUrl || /unknown/i.test(folioFromUrl)) {
+        result = {
+          status: LayerStatus.FAILED,
+          payload: { url, folioFromUrl },
+          error: "md_pa_link_missing_folio",
+        };
+      } else {
+        const pa = await enrichPropertyAppraiser(folioFromUrl);
+        await prisma.enrichmentLayer.upsert({
+          where: { lotId_name: { lotId: lot.id, name: "pa_parcel" } },
+          update: {
+            status: pa.status,
+            payload: pa.payload as Prisma.InputJsonValue,
+            error: pa.error ?? null,
+            fetchedAt: new Date(),
+          },
+          create: {
+            lotId: lot.id,
+            name: "pa_parcel",
+            status: pa.status,
+            payload: pa.payload as Prisma.InputJsonValue,
+            error: pa.error ?? null,
+          },
+        });
+        if (pa.status === LayerStatus.OK) {
+          await applyPaDerivedToLot(lot.id, pa.payload as Record<string, unknown>);
+        }
+        const salesCount = Array.isArray(pa.payload.salesInfos) ? pa.payload.salesInfos.length : 0;
+        const assessCount = Array.isArray(pa.payload.assessmentInfos)
+          ? pa.payload.assessmentInfos.length
+          : 0;
+        result = {
+          status: pa.status,
+          payload: {
+            url,
+            folioFromUrl,
+            salesCount,
+            assessCount,
+            justValue: pa.payload.justValue ?? null,
+            assessedValue: pa.payload.assessedValue ?? null,
+            note: "Miami-Dade PA via GetPropertySearchByFolio + ArcGIS (same free JSON as enrich_pa_6h)",
+          },
+          error: pa.error,
+          propertyPatch:
+            pa.status === LayerStatus.OK
+              ? {
+                  assessedValue:
+                    typeof pa.payload.assessedValue === "number" ? pa.payload.assessedValue : undefined,
+                  marketValue:
+                    typeof pa.payload.justValue === "number" ? pa.payload.justValue : undefined,
+                }
+              : undefined,
+        };
+      }
     }
 
     if (!result) continue;

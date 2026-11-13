@@ -703,23 +703,41 @@ export async function runPaEnrichment(limit = 250, jobKey = "enrich_pa_6h") {
       propertyAddress: true,
       propertyId: true,
     } as const;
+    const todayCivil = floridaDateISO();
+    const todayUtc = new Date(`${todayCivil}T00:00:00.000Z`);
     for (const county of liveCounties) {
       const baseWhere = { county, NOT: { folioNormalized: "UNKNOWN" as const } };
-      const missing = await prisma.lot.findMany({
+      // Prefer upcoming / sale-day lots missing PA so board analysis candidates fill first.
+      const missingUpcoming = await prisma.lot.findMany({
         take: perCounty,
-        orderBy: [{ updatedAt: "desc" }],
+        orderBy: [{ saleDate: "asc" }, { updatedAt: "desc" }],
         where: {
           ...baseWhere,
+          saleDate: { gte: todayUtc },
           layers: { none: { name: "pa_parcel" } },
         },
         select: selectLot,
       });
-      lots.push(...missing);
-      const remain = perCounty - missing.length;
+      lots.push(...missingUpcoming);
+      let remain = perCounty - missingUpcoming.length;
+      if (remain > 0) {
+        const missingPast = await prisma.lot.findMany({
+          take: remain,
+          orderBy: [{ updatedAt: "desc" }],
+          where: {
+            ...baseWhere,
+            saleDate: { lt: todayUtc },
+            layers: { none: { name: "pa_parcel" } },
+          },
+          select: selectLot,
+        });
+        lots.push(...missingPast);
+        remain -= missingPast.length;
+      }
       if (remain <= 0) continue;
       const refresh = await prisma.lot.findMany({
         take: remain,
-        orderBy: [{ updatedAt: "desc" }],
+        orderBy: [{ saleDate: "asc" }, { updatedAt: "desc" }],
         where: {
           ...baseWhere,
           layers: { some: { name: "pa_parcel" } },
