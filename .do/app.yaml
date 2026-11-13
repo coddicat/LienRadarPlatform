@@ -30,9 +30,7 @@ services:
       - key: DATABASE_URL
         scope: RUN_TIME
         value: ${db.DATABASE_URL}
-      - key: REDIS_URL
-        scope: RUN_TIME
-        value: ${redis.DATABASE_URL}
+      # Optional: add managed Valkey later and bind REDIS_URL=${redis.DATABASE_URL}
       - key: NEXTAUTH_URL
         scope: RUN_TIME
         value: ${APP_URL}
@@ -62,9 +60,6 @@ workers:
       - key: DATABASE_URL
         scope: RUN_TIME
         value: ${db.DATABASE_URL}
-      - key: REDIS_URL
-        scope: RUN_TIME
-        value: ${redis.DATABASE_URL}
       - key: LR_ACTIVE_COUNTIES
         scope: RUN_AND_BUILD_TIME
         value: "miami-dade,broward,palm-beach,monroe"
@@ -94,10 +89,8 @@ databases:
     engine: PG
     version: "16"
     production: false
-  - name: redis
-    engine: VALKEY
-    version: "8"
-    production: false
+  # Cache is optional (app runs without REDIS_URL). Managed Redis/Valkey on App
+  # Platform requires production: true — add later if you want shared cache.
 
 alerts:
   - rule: DEPLOYMENT_FAILED
