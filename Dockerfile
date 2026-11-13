@@ -1,9 +1,8 @@
-# LienRadar web + pre-deploy migrate image (App Platform)
-FROM node:20-bookworm-slim AS base
+# LienRadar web + pre-deploy migrate image (App Platform).
+# Uses Playwright base so admin-triggered calendar/day_refresh (Chromium) works
+# on the web service the same way as the ingest worker.
+FROM mcr.microsoft.com/playwright:v1.65.0-jammy AS base
 WORKDIR /app
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
 
 FROM base AS deps
 COPY package.json package-lock.json ./
@@ -30,6 +29,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=8080
+# Prefer browsers bundled in the Playwright image.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY --from=build /app /app
 EXPOSE 8080
 CMD ["npm", "run", "start", "-w", "@lienradar/web"]

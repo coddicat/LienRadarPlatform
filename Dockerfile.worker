@@ -1,5 +1,5 @@
 # LienRadar ingest worker (Playwright browsers included)
-FROM mcr.microsoft.com/playwright:v1.51.0-jammy
+FROM mcr.microsoft.com/playwright:v1.65.0-jammy
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -13,6 +13,7 @@ RUN npm ci
 
 COPY . .
 ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build?schema=public"
 RUN npm run db:generate && npm run build:worker
 

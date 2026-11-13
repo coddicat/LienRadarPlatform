@@ -133,6 +133,16 @@ export function parseDelinquentText(text: string): {
 
 async function extractPdfText(buf: Buffer): Promise<string> {
   const { PDFParse } = await import("pdf-parse");
+  // Next/webpack can break the default worker URL — point at the package worker file.
+  try {
+    const worker = await import("pdf-parse/worker");
+    const workerPath = typeof worker.getPath === "function" ? worker.getPath() : null;
+    if (workerPath && typeof PDFParse.setWorker === "function") {
+      PDFParse.setWorker(workerPath);
+    }
+  } catch {
+    // Worker package optional; fall through to library default.
+  }
   const parser = new PDFParse({ data: new Uint8Array(buf) });
   try {
     const textResult = await parser.getText();
